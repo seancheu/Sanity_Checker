@@ -1,0 +1,15 @@
+{
+  "args": {
+    "fft_size": null,
+    "fs_hint": null,
+    "max_samples": 10000000,
+    "out_dir_base": "out_report",
+    "quiet": false,
+    "verbose": false,
+    "window_size": 262144,
+    "windows": 16
+  },
+  "created_at": "2025-09-23 14:47:53",
+  "input_file": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test.wav",
+  "run_dir": "out_report\\run_test_20250923_144753"
+}
