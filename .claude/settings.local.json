@@ -6,7 +6,9 @@
       "Bash(./venv/Scripts/python.exe 1_sanity_check_iq.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --verbose)",
       "Bash(./venv/Scripts/python.exe 1_sanity_check_iq.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000)",
       "Bash(./venv/Scripts/python.exe 2_wideband_exploration.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(./venv/Scripts/python.exe 2_wideband_exploration.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0 --max_duration 30)",
+      "Bash(./venv/Scripts/python.exe 2_wideband_exploration.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0 --max_duration 5)"
     ],
     "deny": [],
     "ask": []

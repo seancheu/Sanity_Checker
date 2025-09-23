@@ -57,7 +57,7 @@ def smart_sampling_strategy(N, fs, target_duration=60.0, min_samples=10e6):
     effective_fs = fs / step
 
     print_progress(f"Large file detected: {duration:.1f}s ({N/1e6:.1f}M samples)")
-    print_progress(f"Using 1:{step} sampling → {len(sample_indices)/1e6:.1f}M samples, {target_duration:.1f}s effective")
+    print_progress(f"Using 1:{step} sampling -> {len(sample_indices)/1e6:.1f}M samples, {target_duration:.1f}s effective")
 
     return True, sample_indices, effective_fs, reduction_factor
 
@@ -74,6 +74,62 @@ def to_complex_iq(x, conv="I+Q"):
 
 def dc_remove(xc):
     return xc - np.mean(xc)
+
+def read_with_chunked_sampling(file_path, reduction_factor):
+    """
+    Read WAV file with chunked sampling for memory efficiency.
+    Applies systematic sampling (every Nth sample) while reading in chunks.
+    """
+    # Get file info without loading
+    info = sf.info(file_path)
+    total_frames = info.frames
+    channels = info.channels
+
+    # Calculate sampling parameters
+    step = int(np.ceil(reduction_factor))
+    expected_samples = total_frames // step
+
+    # Determine chunk size (1M samples or 10% of file, whichever is smaller)
+    chunk_size = min(1024 * 1024, total_frames // 10)
+
+    print_progress(f"Chunked sampling: step={step}, chunk_size={chunk_size:,}, expected_output={expected_samples/1e6:.1f}M samples")
+
+    # Pre-allocate output array
+    x_sampled = np.zeros((expected_samples, channels), dtype=np.float32)
+
+    samples_read = 0
+    samples_written = 0
+
+    with sf.SoundFile(file_path, 'r') as sfile:
+        while samples_read < total_frames and samples_written < expected_samples:
+            # Calculate chunk boundaries
+            chunk_start = samples_read
+            chunk_end = min(samples_read + chunk_size, total_frames)
+            actual_chunk_size = chunk_end - chunk_start
+
+            # Read chunk
+            chunk_data = sfile.read(actual_chunk_size, always_2d=True)
+
+            # Apply systematic sampling to chunk
+            # Start sampling from the correct offset within the chunk
+            start_offset = (step - (samples_read % step)) % step
+            subsampled_chunk = chunk_data[start_offset::step]
+
+            # Write to output array
+            end_idx = min(samples_written + len(subsampled_chunk), expected_samples)
+            actual_write_size = end_idx - samples_written
+            x_sampled[samples_written:end_idx] = subsampled_chunk[:actual_write_size]
+
+            samples_written += actual_write_size
+            samples_read = chunk_end
+
+            # Log progress for large files
+            if chunk_end % (chunk_size * 5) == 0:
+                progress_pct = 100 * samples_read / total_frames
+                print_progress(f"Reading progress: {progress_pct:.1f}% ({samples_read:,}/{total_frames:,} frames)")
+
+    print_progress(f"Chunked sampling complete: {samples_written:,} samples written")
+    return x_sampled[:samples_written]
 
 def welch_psd(xc, fs, nperseg, noverlap):
     f, Pxx = sig.welch(
@@ -268,47 +324,97 @@ def main():
     ap.add_argument("--cfar_k", type=float, default=3.0, help="CFAR k (higher = stricter)")
     ap.add_argument("--cfar_guard", type=int, default=1, help="Guard cells per axis")
     ap.add_argument("--cfar_train", type=int, default=6, help="Training cells per axis")
+    # New optimization parameters
+    ap.add_argument("--max_duration", type=float, default=60.0, help="Max processing duration (s) for large files")
+    ap.add_argument("--force_full", action="store_true", help="Force full processing (disable sampling)")
     args = ap.parse_args()
 
+    overall_start = time.time()
     Path(args.out).mkdir(parents=True, exist_ok=True)
 
-    # Load WAV
-    x, fs_hdr = sf.read(args.wav, always_2d=True)
-    x = x.astype(np.float32, copy=False)
+    # Load WAV metadata first
+    info = sf.info(args.wav)
+    fs_hdr = info.samplerate
     fs = float(args.fs_hint) if args.fs_hint else float(fs_hdr)
-    N, C = x.shape
+    N_total = info.frames
+    C = info.channels
+
     if C < 2:
         raise SystemExit(f"Expected stereo I/Q. Got {C} channel(s).")
-    dur = N / fs
 
-    # Complex IQ
-    xc = to_complex_iq(x, conv=args.conv)
-    xc = dc_remove(xc)
+    total_duration = N_total / fs
+    print_progress(f"File: {args.wav}")
+    print_progress(f"Total: {N_total/1e6:.1f}M samples, {total_duration:.1f}s @ {fs/1e6:.1f} MHz")
 
-    # PSD (Welch)
+    # Determine sampling strategy
+    use_sampling, sample_indices, effective_fs, reduction_factor = smart_sampling_strategy(
+        N_total, fs, target_duration=args.max_duration
+    )
+
+    if args.force_full:
+        use_sampling = False
+        effective_fs = fs
+        reduction_factor = 1.0
+        print_progress("--force_full: Processing entire file")
+
+    # Estimate memory usage
     nperseg = int(args.nperseg)
     noverlap = int(nperseg * args.overlap)
-    f_psd, Pxx = welch_psd(xc, fs, nperseg, noverlap)
+    N_eff = len(sample_indices) if use_sampling else N_total
+    mem_est_mb, n_windows = estimate_memory_usage(N_eff, nperseg, args.overlap)
+    print_progress(f"Estimated memory: {mem_est_mb:.1f} MB for {n_windows} time windows")
+
+    # Load data with sampling if needed
+    load_start = time.time()
+    if use_sampling:
+        # Use chunked reading for memory efficiency with large files
+        x = read_with_chunked_sampling(args.wav, reduction_factor)
+    else:
+        x, _ = sf.read(args.wav, always_2d=True)
+        x = x.astype(np.float32, copy=False)
+
+    N, C = x.shape
+    print_progress(f"Loaded {N/1e6:.1f}M samples", time.time() - load_start)
+
+    # Complex IQ conversion
+    iq_start = time.time()
+    xc = to_complex_iq(x, conv=args.conv)
+    xc = dc_remove(xc)
+    print_progress(f"I/Q conversion completed", time.time() - iq_start)
+
+    # PSD (Welch) - always compute on effective data
+    psd_start = time.time()
+    f_psd, Pxx = welch_psd(xc, effective_fs, nperseg, noverlap)
     Pxx_db = 10*np.log10(np.maximum(Pxx, 1e-20))
     floor_db = noise_floor_db(Pxx_db)
     carriers = find_carriers(f_psd, Pxx_db, floor_db, min_prom_db=args.prom_db)
+    print_progress(f"PSD analysis: found {len(carriers)} carriers", time.time() - psd_start)
 
     # Waterfall (STFT)
-    f, t, S_db = stft_waterfall(xc, fs, nperseg, noverlap)
+    stft_start = time.time()
+    f, t, S_db = stft_waterfall(xc, effective_fs, nperseg, noverlap)
+    print_progress(f"STFT waterfall ({S_db.shape[0]}×{S_db.shape[1]})", time.time() - stft_start)
 
     # CFAR activity mask + occupancy
+    cfar_start = time.time()
     mask = cfar_mask(S_db, guard=args.cfar_guard, train=args.cfar_train, k=args.cfar_k)
     occ = mask.mean(axis=1)  # per-frequency occupancy [0..1]
     time_burstiness = mask.mean(axis=0)
+    print_progress(f"CFAR detection completed", time.time() - cfar_start)
 
     # -------- Save figures --------
+    plot_start = time.time()
+
     # PSD
     fig = plt.figure(figsize=(10,4))
     plt.plot(f_psd/1e6, Pxx_db, lw=1)
     plt.axhline(floor_db, ls="--", alpha=0.5, label="noise floor")
     for c in carriers:
         plt.axvline(c["f_center_hz"]/1e6, color="r", alpha=0.3)
-    plt.title("Welch PSD"); plt.xlabel("Frequency (MHz)"); plt.ylabel("dB/Hz")
+    title = f"Welch PSD"
+    if use_sampling:
+        title += f" (1:{int(reduction_factor)} sampled)"
+    plt.title(title); plt.xlabel("Frequency (MHz)"); plt.ylabel("dB/Hz")
     plt.legend(loc="lower left")
     save_png(Path(args.out, "psd.png"), fig)
 
@@ -317,7 +423,10 @@ def main():
     extent=[f[0]/1e6, f[-1]/1e6, t[-1], t[0]]
     plt.imshow(S_db, aspect="auto", extent=extent, cmap="viridis")
     plt.colorbar(label="dB")
-    plt.title("Waterfall (STFT magnitude, dB)")
+    title = f"Waterfall (STFT magnitude, dB)"
+    if use_sampling:
+        title += f" - 1:{int(reduction_factor)} sampled"
+    plt.title(title)
     plt.xlabel("Frequency (MHz)"); plt.ylabel("Time (s)")
     save_png(Path(args.out, "waterfall.png"), fig)
 
@@ -325,10 +434,17 @@ def main():
     fig = plt.figure(figsize=(10,3))
     plt.plot(f/1e6, occ, lw=1)
     plt.ylim(0, 1.02)
-    plt.title("Occupancy (CFAR activity fraction)"); plt.xlabel("Frequency (MHz)"); plt.ylabel("Duty cycle")
+    title = f"Occupancy (CFAR activity fraction)"
+    if use_sampling:
+        title += f" - 1:{int(reduction_factor)} sampled"
+    plt.title(title); plt.xlabel("Frequency (MHz)"); plt.ylabel("Duty cycle")
     save_png(Path(args.out, "occupancy.png"), fig)
 
+    print_progress(f"Generated plots", time.time() - plot_start)
+
     # -------- Save CSVs / JSON --------
+    io_start = time.time()
+
     with open(Path(args.out,"carriers.csv"), "w", newline="") as fcsv:
         w = csv.DictWriter(fcsv, fieldnames=["f_center_hz","p_db","bw_hz_est","snr_db_est"])
         w.writeheader()
@@ -339,19 +455,37 @@ def main():
                np.c_[t, time_burstiness], delimiter=",",
                header="time_s,activity", comments="")
 
+    # Enhanced summary with optimization info
+    effective_duration = N / effective_fs
     summary = {
         "wav": str(Path(args.wav).resolve()),
         "fs_header_hz": float(fs_hdr),
-        "fs_used_hz": fs,
-        "duration_s": float(dur),
+        "fs_used_hz": float(effective_fs),
+        "original_fs_hz": float(fs),
+        "duration_s": float(effective_duration),
+        "original_duration_s": float(total_duration),
+        "samples_processed": int(N),
+        "original_samples": int(N_total),
         "nperseg": nperseg,
         "overlap": float(args.overlap),
-        "noise_floor_db": floor_db,
+        "noise_floor_db": float(floor_db),
         "num_carriers": len(carriers),
         "cfar": {"k": float(args.cfar_k), "guard": int(args.cfar_guard), "train": int(args.cfar_train)},
         "prom_db": float(args.prom_db),
+        "optimization": {
+            "used_sampling": use_sampling,
+            "reduction_factor": float(reduction_factor),
+            "target_duration_s": float(args.max_duration),
+            "memory_estimate_mb": float(mem_est_mb),
+            "waterfall_shape": [int(S_db.shape[0]), int(S_db.shape[1])]
+        }
     }
     Path(args.out, "summary.json").write_text(json.dumps(summary, indent=2))
+
+    print_progress(f"Saved outputs", time.time() - io_start)
+
+    total_elapsed = time.time() - overall_start
+    print_progress(f"Analysis completed in {total_elapsed:.1f}s")
     print(json.dumps(summary, indent=2))
 
 if __name__ == "__main__":

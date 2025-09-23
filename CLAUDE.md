@@ -19,6 +19,15 @@ python 1_sanity_check_iq.py your.wav --fs_hint 20000000
 # Step 2: Wideband exploration - generates PSD, waterfall, occupancy plots
 python 2_wideband_exploration.py your_20MHz.wav --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0
 
+# For large files (>60s), automatic optimization applies:
+# - Smart sampling preserves spectral characteristics
+# - Chunked CFAR processing for memory efficiency
+# - Progress indicators show real-time status
+
+# Performance options:
+# --max_duration 30    # More aggressive sampling (30s target)
+# --force_full         # Disable sampling (slower but full precision)
+
 # Step 3A: Slice signals per carrier (whole file)
 python 3_signal_detection_slicing.py your_20MHz.wav --fs_hint 20000000 --carriers_csv out_report/carriers.csv --mode carriers --win 16384 --hop_frac 0.5 --oversample 4.0 --min_bw 100000 --out slices_out
 
