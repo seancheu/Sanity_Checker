@@ -1,0 +1,16 @@
+{
+  "wav": "C:\\Users\\Sean\\Documents\\Python\\Test files\\13-27-07_538000000Hz-006.wav",
+  "fs_hz": 20000000.0,
+  "frames": 559284224,
+  "duration_s": 27.9642112,
+  "params": {
+    "mem_budget_mb": 512,
+    "rms_win_ms": 5.0,
+    "thresh_dbfs": -60.0,
+    "min_dur_ms": 5.0,
+    "gap_ms": 3.0,
+    "pad_ms": 2.0,
+    "chunk_frames": 16777216
+  },
+  "num_slices": 1
+}

@@ -1,0 +1,9 @@
+python 2_wideband_exploration.py "C:\Users\Sean\Documents\Python\Test files\13-27-07_538000000Hz-006.wav" `
+  --fs_hint 2048000 `
+  --conv Q+I `
+  --nperseg 4096 `
+  --overlap 0.5 `
+  --prom_db 12 `
+  --cfar_k 2.4 `
+  --cfar_train 12 `
+  --cfar_guard 2

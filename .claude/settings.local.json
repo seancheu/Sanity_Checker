@@ -8,7 +8,12 @@
       "Bash(./venv/Scripts/python.exe 2_wideband_exploration.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0)",
       "Bash(timeout:*)",
       "Bash(./venv/Scripts/python.exe 2_wideband_exploration.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0 --max_duration 30)",
-      "Bash(./venv/Scripts/python.exe 2_wideband_exploration.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0 --max_duration 5)"
+      "Bash(./venv/Scripts/python.exe 2_wideband_exploration.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0 --max_duration 5)",
+      "Bash(./venv/Scripts/python.exe run_iq_pipeline_v2.py --help)",
+      "Bash(./venv/Scripts/python.exe run_iq_pipeline_v2.py \"C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav\" --fs_hint 20000000 --enable_step3b --enable_step4 --step4_emit_h5 --timeout 300)",
+      "Bash(dir:*)",
+      "Bash(./venv/Scripts/python.exe run_iq_pipeline_v2.py \"C:\\Users\\Sean\\Documents\\Python\\Test files\\13-27-07_538000000Hz-006.wav\" --fs_hint 20000000 --enable_step3b --enable_step4 --step4_emit_h5 --timeout 300)",
+      "Bash(./venv/Scripts/python.exe run_iq_pipeline_v2.py \"C:\\Users\\Sean\\Documents\\Python\\Test files\\13-27-07_538000000Hz-006.wav\" --fs_hint 20000000 --only_step1)"
     ],
     "deny": [],
     "ask": []
