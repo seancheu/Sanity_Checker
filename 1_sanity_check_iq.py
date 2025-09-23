@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-I/Q Data Sanity Checker for RF Signal Processing Pipeline
+I/Q Data Sanity Checker for RF Signal Processing Pipeline (streaming full-file)
 
-This script validates I/Q data integrity and quality for downstream RF signal analysis.
-It checks for data corruption, determines optimal I/Q convention, calculates image rejection
-ratio (IRR), and provides comprehensive statistics for quality assessment.
+Key features:
+- Per-run unique output subfolder under --out_dir
+- UTF-8-safe outputs
+- Streams entire file in bounded RAM using a computed chunk size from --mem_budget_mb
+- Pass 1: Full-file stats + IRR for all I/Q conventions (accumulate pos/neg power)
+- Pass 2: Full-file envelope kurtosis under best convention via online moments
 
-Example usage:
-    python 1_sanity_check_iq.py your.wav --fs_hint 20000000
-    python 1_sanity_check_iq.py input.wav --out_dir results --max_samples 1000000
+Example:
+    python 1_sanity_check_iq_v4.py your.wav --fs_hint 20000000 --mem_budget_mb 512
 """
 
 import argparse
@@ -21,771 +23,633 @@ from typing import Dict, Any, Tuple, Optional, Union
 
 import numpy as np
 import soundfile as sf
-import scipy.signal as sig
 
 # Configuration constants
-DEFAULT_FFT_SIZE: int = 1 << 18  # 262144 samples
-MIN_FFT_SIZE: int = 1 << 12     # 4096 samples
-MAX_FFT_SIZE: int = 1 << 20     # 1048576 samples
-DEFAULT_MAX_SAMPLES: int = 10_000_000  # 10M samples for large file sampling
-CLIP_THRESHOLD: float = 0.999   # Clipping detection threshold
-EPSILON: float = 1e-12          # Numerical stability constant
-DEFAULT_IRR_THRESHOLD: float = 20.0  # Good IRR threshold in dB
-DEFAULT_KURTOSIS_THRESHOLD: float = 3.0  # Normal distribution baseline
+DEFAULT_FFT_SIZE: int = 1 << 18   # 262144
+MIN_FFT_SIZE: int = 1 << 12       # 4096
+MAX_FFT_SIZE: int = 1 << 20       # 1048576
+CLIP_THRESHOLD: float = 0.999
+EPSILON: float = 1e-12
+DEFAULT_IRR_THRESHOLD: float = 20.0
 
-# Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-
 class SanityCheckError(Exception):
-    """Custom exception for sanity check failures."""
     pass
 
+# --------- Path helpers ---------
 
 def validate_input_file(file_path: Union[str, Path]) -> Path:
-    """
-    Validate input WAV file exists and is readable.
-
-    Args:
-        file_path: Path to input WAV file
-
-    Returns:
-        Validated Path object
-
-    Raises:
-        SanityCheckError: If file doesn't exist or isn't readable
-    """
-    path = Path(file_path)
-
-    if not path.exists():
-        raise SanityCheckError(f"Input file does not exist: {path}")
-
-    if not path.is_file():
-        raise SanityCheckError(f"Input path is not a file: {path}")
-
-    if not os.access(path, os.R_OK):
-        raise SanityCheckError(f"Input file is not readable: {path}")
-
-    return path
-
+    p = Path(file_path)
+    if not p.exists():
+        raise SanityCheckError(f"Input file does not exist: {p}")
+    if not p.is_file():
+        raise SanityCheckError(f"Input path is not a file: {p}")
+    if not os.access(p, os.R_OK):
+        raise SanityCheckError(f"Input file is not readable: {p}")
+    return p
 
 def create_output_directory(out_dir: Union[str, Path]) -> Path:
-    """
-    Create output directory if it doesn't exist.
-
-    Args:
-        out_dir: Output directory path
-
-    Returns:
-        Validated Path object
-
-    Raises:
-        SanityCheckError: If directory cannot be created
-    """
     path = Path(out_dir)
-
     try:
         path.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError) as e:
         raise SanityCheckError(f"Cannot create output directory {path}: {e}")
-
     if not os.access(path, os.W_OK):
         raise SanityCheckError(f"Output directory is not writable: {path}")
-
     return path
 
-
-def load_wav_smart(file_path: Path, max_samples: Optional[int] = None) -> Tuple[np.ndarray, float]:
-    """
-    Smart WAV file loader with memory-efficient subsampling for large files.
-
-    For large files, uses chunk-based reading and subsampling to maintain memory efficiency
-    while ensuring representative sampling across the entire file duration.
-
-    Args:
-        file_path: Path to WAV file
-        max_samples: Maximum samples to load (None for all)
-
-    Returns:
-        Tuple of (samples, sample_rate)
-
-    Raises:
-        SanityCheckError: If file cannot be loaded or has invalid format
-    """
+def create_unique_run_directory(base_out_dir: Union[str, Path], input_file: Path) -> Path:
+    base = create_output_directory(base_out_dir)
+    ts = time.strftime('%Y%m%d_%H%M%S')
+    stem = input_file.stem
+    candidate = base / f"run_{stem}_{ts}"
+    idx = 1
+    while candidate.exists():
+        candidate = base / f"run_{stem}_{ts}_{idx:02d}"
+        idx += 1
     try:
-        # Get file info first
-        info = sf.info(file_path)
-        total_frames = info.frames
+        candidate.mkdir(parents=True, exist_ok=False)
+    except (OSError, PermissionError) as e:
+        raise SanityCheckError(f"Cannot create run directory {candidate}: {e}")
+    return candidate
 
-        logger.info(f"Loading WAV file: {file_path}")
-        logger.info(f"File info - Frames: {total_frames:,}, Channels: {info.channels}, "
-                   f"Sample rate: {info.samplerate} Hz, Duration: {total_frames/info.samplerate:.2f}s")
-
-        # Determine if we need to sample
-        if max_samples and total_frames > max_samples:
-            # Calculate sampling strategy
-            step = max(1, total_frames // max_samples)
-            chunk_size = min(1024 * 1024, total_frames // 10)  # 1M samples or 10% of file
-            logger.info(f"Large file detected. Using step={step} sampling with {chunk_size:,} sample chunks")
-
-            # Pre-allocate output array
-            expected_samples = total_frames // step
-            x_sampled = np.zeros((expected_samples, info.channels), dtype=np.float32)
-
-            samples_written = 0
-            samples_read = 0
-
-            # Read file in chunks and subsample
-            while samples_read < total_frames and samples_written < expected_samples:
-                # Calculate chunk boundaries
-                chunk_start = samples_read
-                chunk_end = min(samples_read + chunk_size, total_frames)
-
-                # Read chunk
-                chunk_data = sf.read(file_path,
-                                   start=chunk_start,
-                                   stop=chunk_end,
-                                   always_2d=True,
-                                   dtype='float32')
-
-                if isinstance(chunk_data, tuple):
-                    chunk_data = chunk_data[0]  # Extract data if tuple returned
-
-                # Subsample the chunk
-                chunk_indices = np.arange(0, len(chunk_data), step)
-                subsampled_chunk = chunk_data[chunk_indices]
-
-                # Write to output array
-                end_idx = min(samples_written + len(subsampled_chunk), expected_samples)
-                actual_chunk_size = end_idx - samples_written
-                x_sampled[samples_written:end_idx] = subsampled_chunk[:actual_chunk_size]
-
-                samples_written += actual_chunk_size
-                samples_read = chunk_end
-
-                # Log progress for very large files
-                if chunk_end % (chunk_size * 5) == 0:
-                    progress_pct = 100 * samples_read / total_frames
-                    logger.debug(f"Progress: {progress_pct:.1f}% ({samples_read:,}/{total_frames:,} frames)")
-
-            # Trim to actual samples written
-            x = x_sampled[:samples_written]
-            sr = info.samplerate
-
-            logger.info(f"Loaded {x.shape[0]:,} samples after subsampling (step={step})")
-        else:
-            # Load entire file for smaller files
-            x, sr = sf.read(file_path, always_2d=True, dtype='float32')
-            logger.info(f"Loaded {x.shape[0]:,} samples (complete file)")
-
-        # Ensure float32 type
-        if x.dtype != np.float32:
-            x = x.astype(np.float32, copy=False)
-
-        return x, float(sr)
-
-    except Exception as e:
-        raise SanityCheckError(f"Failed to load WAV file {file_path}: {e}")
-
-
-def load_wav_file(file_path: Path, max_samples: Optional[int] = None) -> Tuple[np.ndarray, float]:
-    """
-    Load WAV file with error handling and optional sampling for large files.
-
-    This is a wrapper around load_wav_smart for backward compatibility.
-
-    Args:
-        file_path: Path to WAV file
-        max_samples: Maximum samples to load (None for all)
-
-    Returns:
-        Tuple of (samples, sample_rate)
-
-    Raises:
-        SanityCheckError: If file cannot be loaded or has invalid format
-    """
-    return load_wav_smart(file_path, max_samples)
-
+# --------- Streaming math helpers ---------
 
 def calculate_adaptive_fft_size(num_samples: int, target_size: int = DEFAULT_FFT_SIZE) -> int:
-    """
-    Calculate adaptive FFT size based on available samples.
-
-    Args:
-        num_samples: Number of available samples
-        target_size: Target FFT size
-
-    Returns:
-        Optimal FFT size (power of 2)
-    """
-    # Limit to available samples
     max_size = min(target_size, num_samples)
-
-    # Find largest power of 2 <= max_size
+    if max_size < 2:
+        return MIN_FFT_SIZE
     fft_size = 1 << (max_size.bit_length() - 1)
+    return max(MIN_FFT_SIZE, min(MAX_FFT_SIZE, fft_size))
 
-    # Ensure minimum size
-    fft_size = max(MIN_FFT_SIZE, min(MAX_FFT_SIZE, fft_size))
-
-    logger.debug(f"Adaptive FFT size: {fft_size} (target: {target_size}, samples: {num_samples})")
-
-    return fft_size
-
-
-def calculate_image_rejection_ratio(complex_signal: np.ndarray, fft_size: Optional[int] = None) -> float:
+class RunningStats:
     """
-    Calculate image rejection ratio (IRR) in dB.
-
-    The IRR measures the quality of I/Q data by comparing power in positive
-    vs negative frequencies. Higher IRR indicates better I/Q balance.
-
-    Args:
-        complex_signal: Complex I/Q signal
-        fft_size: FFT size for analysis (None for adaptive)
-
-    Returns:
-        Image rejection ratio in dB (absolute value)
-
-    Raises:
-        SanityCheckError: If calculation fails
+    Online mean/std/min/max/rms & clip counting for a single channel.
+    Uses Welford for mean/std; RMS via sum of squares.
     """
-    try:
-        if len(complex_signal) == 0:
-            raise ValueError("Empty complex signal")
+    def __init__(self):
+        self.n = 0
+        self.mean = 0.0
+        self.M2 = 0.0
+        self.minv = float('inf')
+        self.maxv = float('-inf')
+        self.sum_sq = 0.0
+        self.clip_count = 0
+        self.nan_count = 0
+        self.inf_count = 0
 
-        # Use adaptive FFT size if not specified
-        if fft_size is None:
-            fft_size = calculate_adaptive_fft_size(len(complex_signal))
+    def update(self, x: np.ndarray):
+        # Count nans/infs and sanitize for stats
+        n_nan = np.isnan(x).sum()
+        n_inf = np.isinf(x).sum()
+        self.nan_count += int(n_nan)
+        self.inf_count += int(n_inf)
+        x = x[np.isfinite(x)]
+        if x.size == 0:
+            return
+        # Clip count
+        self.clip_count += int(np.sum(np.abs(x) > CLIP_THRESHOLD))
+        # Min/Max
+        self.minv = float(min(self.minv, np.min(x)))
+        self.maxv = float(max(self.maxv, np.max(x)))
+        # Sum of squares (for RMS)
+        self.sum_sq += float(np.sum(x.astype(np.float64)**2))
+        # Welford updates
+        n_old = self.n
+        self.n += x.size
+        delta = float(np.mean(x)) - self.mean
+        self.mean += (x.size * delta) / self.n
+        # For M2 with batch: sum((xi - new_mean)*(xi - old_mean))
+        # We can compute M2 incrementally using per-batch variance:
+        var_batch = float(np.var(x, dtype=np.float64))
+        self.M2 += var_batch * (x.size - 1) + (n_old * x.size / self.n) * (delta ** 2)
 
-        # Ensure we don't exceed signal length
-        fft_size = min(fft_size, len(complex_signal))
+    def finalize(self, label: str) -> Dict[str, float]:
+        std = float(np.sqrt(self.M2 / self.n)) if self.n > 1 else 0.0
+        rms = float(np.sqrt(self.sum_sq / self.n)) if self.n > 0 else 0.0
+        clip_pct = 100.0 * self.clip_count / self.n if self.n > 0 else 0.0
+        return {
+            f"{label}_mean": float(self.mean),
+            f"{label}_std": std,
+            f"{label}_peak_abs": float(max(abs(self.minv), abs(self.maxv))) if self.n > 0 else 0.0,
+            f"{label}_clip_pct": clip_pct,
+            f"{label}_min": float(self.minv if self.n > 0 else 0.0),
+            f"{label}_max": float(self.maxv if self.n > 0 else 0.0),
+            f"{label}_rms": rms,
+            "nan_count": self.nan_count,   # aggregated outside for both channels
+            "inf_count": self.inf_count,
+        }
 
-        # Take center portion of signal for analysis
-        if len(complex_signal) > fft_size:
-            start_idx = (len(complex_signal) - fft_size) // 2
-            signal_segment = complex_signal[start_idx:start_idx + fft_size]
-        else:
-            signal_segment = complex_signal
-
-        # Compute FFT and shift to center DC
-        X = np.fft.fftshift(np.fft.fft(signal_segment, n=fft_size))
-
-        # Calculate power spectrum with numerical stability
-        P = (np.abs(X) ** 2).astype(np.float64)
-
-        # Split into positive and negative frequency bins
-        mid = P.size // 2
-        pos_power = P[mid + 1:].sum() + EPSILON  # Positive frequencies
-        neg_power = P[:mid].sum() + EPSILON      # Negative frequencies
-
-        # Calculate IRR in dB
-        irr_db = 10.0 * np.log10(pos_power / neg_power)
-
-        # Return absolute value (we care about imbalance magnitude)
-        return float(abs(irr_db))
-
-    except Exception as e:
-        raise SanityCheckError(f"Failed to calculate IRR: {e}")
-
-
-def calculate_basic_statistics(signal: np.ndarray, name: str) -> Dict[str, float]:
+class OnlineKurtosis:
     """
-    Calculate basic statistical measures for a signal.
-
-    Args:
-        signal: Input signal (real-valued)
-        name: Prefix for statistic names
-
-    Returns:
-        Dictionary of statistics
+    Online kurtosis via running raw moments (stable enough for large N).
+    Computes population kurtosis E[((X-μ)/σ)^4].
     """
-    if len(signal) == 0:
-        return {f"{name}_{key}": 0.0 for key in ["mean", "std", "peak_abs", "clip_pct"]}
+    def __init__(self):
+        self.n = 0
+        self.mean = 0.0
+        self.M2 = 0.0
+        self.M3 = 0.0
+        self.M4 = 0.0
 
-    # Use float64 for intermediate calculations to avoid precision loss
-    signal_f64 = signal.astype(np.float64)
+    def update(self, x: np.ndarray):
+        x = x[np.isfinite(x)]
+        if x.size == 0:
+            return
+        x = x.astype(np.float64, copy=False)
+        n1 = self.n
+        n = n1 + x.size
+        delta = np.mean(x) - self.mean
+        delta2 = delta * delta
+        delta3 = delta2 * delta
+        delta4 = delta2 * delta2
+        m2_batch = float(np.var(x, ddof=0))
+        m3_batch = float(((x - np.mean(x))**3).mean())
+        m4_batch = float(((x - np.mean(x))**4).mean())
 
-    return {
-        f"{name}_mean": float(np.mean(signal_f64)),
-        f"{name}_std": float(np.std(signal_f64)),
-        f"{name}_peak_abs": float(np.max(np.abs(signal_f64))),
-        f"{name}_clip_pct": float(100.0 * np.mean(np.abs(signal_f64) > CLIP_THRESHOLD)),
-        f"{name}_min": float(np.min(signal_f64)),
-        f"{name}_max": float(np.max(signal_f64)),
-        f"{name}_rms": float(np.sqrt(np.mean(signal_f64 ** 2)))
-    }
+        # Pébay (2008)-style pooled moments for combining two sets
+        if n1 == 0:
+            self.mean = float(np.mean(x))
+            self.M2 = m2_batch * x.size
+            self.M3 = m3_batch * x.size
+            self.M4 = m4_batch * x.size
+            self.n = x.size
+            return
 
+        mean_new = self.mean + (x.size * delta) / n
 
-def calculate_envelope_kurtosis(complex_signal: np.ndarray) -> float:
-    """
-    Calculate envelope kurtosis to assess signal variability.
+        M2 = self.M2 + x.size * m2_batch + (n1 * x.size / n) * delta2
+        M3 = (self.M3 + x.size * m3_batch
+              + (n1 * x.size / n) * delta3
+              + 3.0 * (self.M2 * x.size / n) * delta
+              - 3.0 * (x.size * m2_batch * n1 / n) * delta)
+        M4 = (self.M4 + x.size * m4_batch
+              + (n1 * x.size / n) * delta4
+              + 6.0 * (self.M2 * x.size / n) * delta2
+              + 4.0 * (self.M3 * x.size / n) * delta
+              - 4.0 * (x.size * m3_batch * n1 / n) * delta
+              - 6.0 * (x.size * m2_batch * n1 / n) * delta2)
 
-    Kurtosis indicates whether the envelope is constant (low kurtosis)
-    or highly variable (high kurtosis), which helps identify signal types.
+        self.mean = mean_new
+        self.M2 = M2
+        self.M3 = M3
+        self.M4 = M4
+        self.n = n
 
-    Args:
-        complex_signal: Complex I/Q signal
-
-    Returns:
-        Envelope kurtosis value
-    """
-    try:
-        # Calculate envelope (magnitude)
-        envelope = np.abs(complex_signal)
-
-        if len(envelope) == 0:
+    def kurtosis(self) -> float:
+        if self.n < 2 or self.M2 <= 0:
             return 0.0
+        var = self.M2 / self.n
+        if var <= 0:
+            return 0.0
+        return float((self.M4 / self.n) / (var ** 2))
 
-        # Normalize envelope
-        env_mean = np.mean(envelope)
-        env_std = np.std(envelope)
+# --------- IRR helpers ---------
 
-        if env_std < EPSILON:
-            return 0.0  # Constant envelope
+def irr_pos_neg_powers(complex_signal: np.ndarray, fft_size: int) -> Tuple[float, float]:
+    """Return (pos_power, neg_power) from a segment."""
+    if complex_signal.size < fft_size:
+        # center-pad with zeros if needed
+        pad = fft_size - complex_signal.size
+        left = pad // 2
+        right = pad - left
+        complex_signal = np.pad(complex_signal, (left, right), mode='constant')
+    else:
+        # center crop
+        start = (complex_signal.size - fft_size) // 2
+        complex_signal = complex_signal[start:start+fft_size]
 
-        normalized_env = (envelope - env_mean) / env_std
+    X = np.fft.fftshift(np.fft.fft(complex_signal, n=fft_size))
+    P = (np.abs(X) ** 2).astype(np.float64)
+    mid = P.size // 2
+    pos = float(P[mid+1:].sum() + EPSILON)
+    neg = float(P[:mid].sum() + EPSILON)
+    return pos, neg
 
-        # Calculate kurtosis (4th moment)
-        kurtosis = float(np.mean(normalized_env ** 4))
+# --------- Streaming passes ---------
 
-        return kurtosis
-
-    except Exception:
-        logger.warning("Failed to calculate envelope kurtosis")
-        return 0.0
-
-
-def determine_optimal_iq_convention(i_channel: np.ndarray, q_channel: np.ndarray,
-                                  fft_size: Optional[int] = None) -> Dict[str, Any]:
+def compute_chunk_size_samples(mem_budget_mb: int, channels: int, floor_fft: int) -> int:
     """
-    Determine optimal I/Q convention by testing different combinations.
+    Compute a safe chunk size (frames) so that chunk * channels * 4 bytes <= mem_budget_mb,
+    and also ensure it's >= floor_fft for FFT analysis. Round up to a power-of-two-ish size.
+    """
+    mem_bytes = max(mem_budget_mb, 64) * 1024 * 1024  # at least 64 MB
+    max_frames = mem_bytes // (channels * 4)          # float32
+    if max_frames < floor_fft:
+        # If budget is tiny, fall back to floor_fft
+        chunk = floor_fft
+    else:
+        chunk = int(max_frames)
+        # snap to multiple of floor_fft to avoid too many fractional segments
+        k = max(1, chunk // floor_fft)
+        chunk = k * floor_fft
+    # keep a sane upper bound to avoid extremely long per-FFT time
+    return int(min(chunk, 16 * 1024 * 1024))  # cap ~16M frames per chunk
 
-    Tests three conventions:
-    - I + jQ (standard)
-    - I - jQ (Q inverted)
-    - Q + jI (channels swapped)
-
-    Args:
-        i_channel: I channel data
-        q_channel: Q channel data
-        fft_size: FFT size for IRR calculation
-
+def pass1_stats_and_irr(filepath: Path, fs: float, fft_size: int, chunk_frames: int) -> Tuple[Dict[str, Any], Dict[str, float]]:
+    """
+    Stream over the entire file:
+    - Running stats for I and Q (mean/std/min/max/rms/clip)
+    - Accumulate pos/neg powers for each convention for IRR
     Returns:
-        Dictionary with IRR results and best convention
+      stats_partial (with per-channel stats & counters),
+      irr_totals: dict of total pos/neg per convention
     """
-    logger.info("Testing I/Q conventions...")
+    info = sf.info(filepath)
+    total_frames = int(info.frames)
+    channels = info.channels
+    if channels < 2:
+        raise SanityCheckError(f"Need 2 channels (I,Q), got {channels}")
 
-    # Remove DC for more accurate IRR measurement
-    i_dc_removed = i_channel - np.mean(i_channel)
-    q_dc_removed = q_channel - np.mean(q_channel)
+    I_stats = RunningStats()
+    Q_stats = RunningStats()
 
-    # Test three conventions
-    conventions = {
-        "I+jQ": i_dc_removed + 1j * q_dc_removed,
-        "I-jQ": i_dc_removed - 1j * q_dc_removed,
-        "Q+jI": q_dc_removed + 1j * i_dc_removed
+    # Accumulators for IRR (per convention)
+    irr_acc = {
+        "I_Q": {"pos": 0.0, "neg": 0.0},
+        "I_neg_Q": {"pos": 0.0, "neg": 0.0},
+        "Q_I": {"pos": 0.0, "neg": 0.0},
     }
 
-    irr_results = {}
-    for name, complex_signal in conventions.items():
-        try:
-            irr_db = calculate_image_rejection_ratio(complex_signal, fft_size)
-            irr_results[f"irr_db_{name.replace('+j', '_').replace('-j', '_neg_').replace('j', '')}"] = irr_db
-            logger.debug(f"IRR for {name}: {irr_db:.2f} dB")
-        except Exception as e:
-            logger.warning(f"Failed to calculate IRR for {name}: {e}")
-            irr_results[f"irr_db_{name.replace('+j', '_').replace('-j', '_neg_').replace('j', '')}"] = 0.0
+    # Iterate chunks
+    start = 0
+    logger.info(f"Pass 1: streaming stats + IRR (fft_size={fft_size}, chunk_frames={chunk_frames})")
+    while start < total_frames:
+        stop = min(start + chunk_frames, total_frames)
+        data = sf.read(filepath, start=start, stop=stop, always_2d=True, dtype='float32')
+        if isinstance(data, tuple):
+            data = data[0]
 
-    # Find best convention
-    best_irr = 0.0
-    best_convention = "I+jQ"
+        # Update channel stats (sanitize NaN/Inf inside RunningStats)
+        I = data[:, 0]
+        Q = data[:, 1]
+        I_stats.update(I)
+        Q_stats.update(Q)
 
-    for key, irr in irr_results.items():
-        if irr > best_irr:
-            best_irr = irr
-            if "I_Q" in key:
-                best_convention = "I+jQ"
-            elif "I_neg_Q" in key:
-                best_convention = "I-jQ"
-            elif "Q_I" in key:
-                best_convention = "Q+jI"
+        # For IRR, remove DC per chunk for stability
+        I_dc = I - float(np.mean(I[np.isfinite(I)])) if np.isfinite(I).any() else I
+        Q_dc = Q - float(np.mean(Q[np.isfinite(Q)])) if np.isfinite(Q).any() else Q
 
-    logger.info(f"Best I/Q convention: {best_convention} (IRR: {best_irr:.2f} dB)")
+        # Conventions
+        sig_I_Q     = I_dc + 1j * Q_dc
+        sig_I_neg_Q = I_dc - 1j * Q_dc
+        sig_Q_I     = Q_dc + 1j * I_dc
 
-    return {
-        **irr_results,
-        "best_convention": best_convention,
-        "best_irr_db": best_irr
+        for key, sig_c in (("I_Q", sig_I_Q), ("I_neg_Q", sig_I_neg_Q), ("Q_I", sig_Q_I)):
+            pos, neg = irr_pos_neg_powers(sig_c, fft_size)
+            irr_acc[key]["pos"] += pos
+            irr_acc[key]["neg"] += neg
+
+        start = stop
+
+    # Extract stats
+    I_final = I_stats.finalize("I")
+    Q_final = Q_stats.finalize("Q")
+
+    # combine NaN/Inf counts
+    nan_total = I_final["nan_count"] + Q_final["nan_count"]
+    inf_total = I_final["inf_count"] + Q_final["inf_count"]
+    del I_final["nan_count"]; del I_final["inf_count"]
+    del Q_final["nan_count"]; del Q_final["inf_count"]
+
+    stats_partial = {
+        **I_final,
+        **Q_final,
+        "nan_count": nan_total,
+        "inf_count": inf_total,
     }
 
+    return stats_partial, {
+        "irr_db_I_Q": 10.0 * np.log10((irr_acc["I_Q"]["pos"]) / (irr_acc["I_Q"]["neg"] + EPSILON)),
+        "irr_db_I_neg_Q": 10.0 * np.log10((irr_acc["I_neg_Q"]["pos"]) / (irr_acc["I_neg_Q"]["neg"] + EPSILON)),
+        "irr_db_Q_I": 10.0 * np.log10((irr_acc["Q_I"]["pos"]) / (irr_acc["Q_I"]["neg"] + EPSILON)),
+    }
+
+def pass2_envelope_kurtosis(filepath: Path, fs: float, best_convention: str, chunk_frames: int) -> float:
+    """
+    Stream again to compute envelope kurtosis under the chosen convention.
+    """
+    info = sf.info(filepath)
+    total_frames = int(info.frames)
+    channels = info.channels
+    if channels < 2:
+        raise SanityCheckError(f"Need 2 channels (I,Q), got {channels}")
+
+    ok = OnlineKurtosis()
+    start = 0
+    logger.info(f"Pass 2: envelope kurtosis (best convention: {best_convention}, chunk_frames={chunk_frames})")
+    while start < total_frames:
+        stop = min(start + chunk_frames, total_frames)
+        data = sf.read(filepath, start=start, stop=stop, always_2d=True, dtype='float32')
+        if isinstance(data, tuple):
+            data = data[0]
+        I = data[:, 0]
+        Q = data[:, 1]
+
+        # DC removal per chunk to stabilize envelope
+        I_dc = I - float(np.mean(I[np.isfinite(I)])) if np.isfinite(I).any() else I
+        Q_dc = Q - float(np.mean(Q[np.isfinite(Q)])) if np.isfinite(Q).any() else Q
+
+        if best_convention == "I+jQ":
+            z = I_dc + 1j * Q_dc
+        elif best_convention == "I-jQ":
+            z = I_dc - 1j * Q_dc
+        else:  # "Q+jI"
+            z = Q_dc + 1j * I_dc
+
+        env = np.abs(z).astype(np.float64, copy=False)
+        ok.update(env)
+
+        start = stop
+
+    return ok.kurtosis()
+
+# --------- Assessment & outputs ---------
 
 def generate_quality_assessment(stats: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Generate quality assessment based on calculated statistics.
+    assessment = {"quality_score": 100.0, "warnings": [], "recommendations": [], "issues": []}
 
-    Args:
-        stats: Dictionary of calculated statistics
-
-    Returns:
-        Quality assessment dictionary
-    """
-    assessment = {
-        "quality_score": 0.0,
-        "warnings": [],
-        "recommendations": [],
-        "issues": []
-    }
-
-    score = 100.0  # Start with perfect score
-
-    # Check for data corruption
     if stats.get("nan_count", 0) > 0:
         assessment["issues"].append(f"Found {stats['nan_count']} NaN values")
-        score -= 20
-
+        assessment["quality_score"] -= 20
     if stats.get("inf_count", 0) > 0:
         assessment["issues"].append(f"Found {stats['inf_count']} infinite values")
-        score -= 20
+        assessment["quality_score"] -= 20
 
-    # Check for clipping
-    i_clip = stats.get("I_clip_pct", 0)
-    q_clip = stats.get("Q_clip_pct", 0)
-    max_clip = max(i_clip, q_clip)
-
+    max_clip = max(stats.get("I_clip_pct", 0.0), stats.get("Q_clip_pct", 0.0))
     if max_clip > 5.0:
         assessment["issues"].append(f"Severe clipping detected: {max_clip:.1f}%")
-        score -= 25
+        assessment["quality_score"] -= 25
     elif max_clip > 1.0:
         assessment["warnings"].append(f"Moderate clipping detected: {max_clip:.1f}%")
-        score -= 10
+        assessment["quality_score"] -= 10
     elif max_clip > 0.1:
         assessment["warnings"].append(f"Minor clipping detected: {max_clip:.1f}%")
-        score -= 5
+        assessment["quality_score"] -= 5
 
-    # Check IRR quality
-    best_irr = stats.get("best_irr_db", 0)
+    best_irr = stats.get("best_irr_db", 0.0)
     if best_irr < 10:
         assessment["issues"].append(f"Poor I/Q balance (IRR: {best_irr:.1f} dB)")
-        score -= 15
+        assessment["quality_score"] -= 15
     elif best_irr < DEFAULT_IRR_THRESHOLD:
         assessment["warnings"].append(f"Suboptimal I/Q balance (IRR: {best_irr:.1f} dB)")
-        score -= 5
+        assessment["quality_score"] -= 5
 
-    # Check I/Q convention
-    best_conv = stats.get("best_convention", "I+jQ")
-    if best_conv != "I+jQ":
-        assessment["recommendations"].append(f"Consider using --conv {best_conv.replace('+j', ' ').replace('-j', ' -').replace('j', '')} in downstream processing")
+    if stats.get("best_convention", "I+jQ") != "I+jQ":
+        bc = stats["best_convention"]
+        assessment["recommendations"].append(
+            f"Consider using --conv {bc.replace('+j', ' ').replace('-j', ' -').replace('j', '')} in downstream processing"
+        )
 
-    # Check envelope characteristics
-    kurtosis = stats.get("envelope_kurtosis", 3.0)
-    if kurtosis < 1.5:
+    # Full-file analysis → covered_duration == file_duration, so no "very short" warning
+    kurt = stats.get("envelope_kurtosis", 3.0)
+    if kurt < 1.5:
         assessment["warnings"].append("Very constant envelope detected - may indicate CW or unmodulated carrier")
-    elif kurtosis > 10:
+    elif kurt > 10:
         assessment["warnings"].append("Highly variable envelope detected - check for intermittent signals or interference")
 
-    # Check duration
-    duration = stats.get("duration_s", 0)
-    if duration < 0.1:
-        assessment["warnings"].append(f"Very short recording ({duration:.3f}s) - may not be sufficient for analysis")
-
-    # Ensure score doesn't go negative
-    assessment["quality_score"] = max(0.0, score)
-
+    assessment["quality_score"] = max(0.0, assessment["quality_score"])
     return assessment
 
-
 def generate_output_files(stats: Dict[str, Any], assessment: Dict[str, Any],
-                         input_file: Path, output_dir: Path) -> Tuple[Path, Path]:
-    """
-    Generate output files with statistics and human-readable report.
-
-    Args:
-        stats: Statistics dictionary
-        assessment: Quality assessment dictionary
-        input_file: Original input file path
-        output_dir: Output directory
-
-    Returns:
-        Tuple of (stats_file_path, report_file_path)
-    """
+                          input_file: Path, output_dir: Path) -> Tuple[Path, Path]:
     base_name = input_file.stem
-
-    # Generate output filenames
     stats_file = output_dir / f"sanity_check_{base_name}_stats.json"
     report_file = output_dir / f"sanity_check_{base_name}_report.txt"
 
-    # Write JSON statistics
-    try:
-        with open(stats_file, 'w') as f:
-            json.dump({**stats, "quality_assessment": assessment}, f, indent=2, sort_keys=True)
-        logger.info(f"Statistics written to: {stats_file}")
-    except Exception as e:
-        logger.error(f"Failed to write statistics file: {e}")
-        raise SanityCheckError(f"Cannot write statistics to {stats_file}: {e}")
+    # JSON
+    with open(stats_file, "w", encoding="utf-8") as f:
+        json.dump({**stats, "quality_assessment": assessment}, f, indent=2, sort_keys=True, ensure_ascii=False)
+    logger.info(f"Statistics written to: {stats_file}")
 
-    # Write human-readable report
-    try:
-        with open(report_file, 'w') as f:
-            f.write("I/Q Data Sanity Check Report\n")
-            f.write("=" * 50 + "\n\n")
+    # TXT report
+    with open(report_file, "w", encoding="utf-8", newline="\n") as f:
+        f.write("I/Q Data Sanity Check Report\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Input File: {input_file}\n")
+        f.write(f"Analysis Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Quality Score: {assessment['quality_score']:.1f}/100\n\n")
 
-            f.write(f"Input File: {input_file}\n")
-            f.write(f"Analysis Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Quality Score: {assessment['quality_score']:.1f}/100\n\n")
+        f.write("File Characteristics:\n")
+        f.write("-" * 20 + "\n")
+        f.write(f"File duration: {stats['file_duration_s']:.3f} seconds\n")
+        f.write(f"Covered duration: {stats['covered_duration_s']:.3f} seconds\n")
+        f.write(f"Coverage fraction: {stats['coverage_fraction']*100:.4f}%\n")
+        f.write(f"Samples analyzed: {stats['frames']:,}\n")
+        f.write(f"Channels: {stats['channels']}\n")
+        f.write(f"Sample Rate (header): {stats['fs_header_hz']:,.0f} Hz\n")
+        f.write(f"Sample Rate (used): {stats['fs_used_hz']:,.0f} Hz\n")
+        f.write(f"Sampling strategy: {stats['sampling_strategy']}\n\n")
 
-            # File characteristics
-            f.write("File Characteristics:\n")
+        f.write("Data Quality:\n")
+        f.write("-" * 20 + "\n")
+        f.write(f"NaN values: {stats['nan_count']}\n")
+        f.write(f"Infinite values: {stats['inf_count']}\n")
+        f.write(f"I channel clipping: {stats.get('I_clip_pct', 0.0):.2f}%\n")
+        f.write(f"Q channel clipping: {stats.get('Q_clip_pct', 0.0):.2f}%\n\n")
+
+        f.write("I/Q Balance Analysis:\n")
+        f.write("-" * 20 + "\n")
+        f.write(f"Best convention: {stats['best_convention']}\n")
+        f.write(f"Best IRR: {stats['best_irr_db']:.2f} dB\n")
+        f.write(f"Envelope kurtosis: {stats['envelope_kurtosis']:.2f}\n\n")
+
+        if assessment['issues']:
+            f.write("Issues Found:\n")
             f.write("-" * 20 + "\n")
-            f.write(f"Duration: {stats['duration_s']:.3f} seconds\n")
-            f.write(f"Samples: {stats['frames']:,}\n")
-            f.write(f"Channels: {stats['channels']}\n")
-            f.write(f"Sample Rate (header): {stats['fs_header_hz']:,.0f} Hz\n")
-            f.write(f"Sample Rate (used): {stats['fs_used_hz']:,.0f} Hz\n\n")
+            for issue in assessment['issues']:
+                f.write(f"[ERROR] {issue}\n")
+            f.write("\n")
 
-            # Data quality
-            f.write("Data Quality:\n")
+        if assessment['warnings']:
+            f.write("Warnings:\n")
             f.write("-" * 20 + "\n")
-            f.write(f"NaN values: {stats['nan_count']}\n")
-            f.write(f"Infinite values: {stats['inf_count']}\n")
-            f.write(f"I channel clipping: {stats.get('I_clip_pct', 0):.2f}%\n")
-            f.write(f"Q channel clipping: {stats.get('Q_clip_pct', 0):.2f}%\n\n")
+            for warning in assessment['warnings']:
+                f.write(f"⚠️ {warning}\n")
+            f.write("\n")
 
-            # I/Q balance
-            f.write("I/Q Balance Analysis:\n")
+        if assessment['recommendations']:
+            f.write("Recommendations:\n")
             f.write("-" * 20 + "\n")
-            f.write(f"Best convention: {stats['best_convention']}\n")
-            f.write(f"Best IRR: {stats['best_irr_db']:.2f} dB\n")
-            f.write(f"Envelope kurtosis: {stats['envelope_kurtosis']:.2f}\n\n")
+            for rec in assessment['recommendations']:
+                f.write(f"[SUGGESTION] {rec}\n")
+            f.write("\n")
 
-            # Issues and recommendations
-            if assessment['issues']:
-                f.write("Issues Found:\n")
-                f.write("-" * 20 + "\n")
-                for issue in assessment['issues']:
-                    f.write(f"[ERROR] {issue}\n")
-                f.write("\n")
+        if not assessment['issues'] and not assessment['warnings']:
+            f.write("[OK] No significant issues detected!\n\n")
 
-            if assessment['warnings']:
-                f.write("Warnings:\n")
-                f.write("-" * 20 + "\n")
-                for warning in assessment['warnings']:
-                    f.write(f"⚠️ {warning}\n")
-                f.write("\n")
-
-            if assessment['recommendations']:
-                f.write("Recommendations:\n")
-                f.write("-" * 20 + "\n")
-                for rec in assessment['recommendations']:
-                    f.write(f"[SUGGESTION] {rec}\n")
-                f.write("\n")
-
-            if not assessment['issues'] and not assessment['warnings']:
-                f.write("[OK] No significant issues detected!\n\n")
-
-        logger.info(f"Report written to: {report_file}")
-    except Exception as e:
-        logger.error(f"Failed to write report file: {e}")
-        raise SanityCheckError(f"Cannot write report to {report_file}: {e}")
-
+    logger.info(f"Report written to: {report_file}")
     return stats_file, report_file
 
+# --------- Orchestration ---------
 
-def perform_sanity_check(wav_file: Path, fs_hint: Optional[float] = None,
-                        fft_size: Optional[int] = None, max_samples: Optional[int] = None,
-                        output_dir: Path = Path("out_report")) -> Dict[str, Any]:
-    """
-    Perform comprehensive I/Q data sanity check.
+def perform_sanity_check_streaming(wav_file: Path, fs_hint: Optional[float],
+                                   fft_size: Optional[int],
+                                   mem_budget_mb: int,
+                                   output_dir: Path) -> Dict[str, Any]:
+    logger.info(f"Starting sanity check (streaming) for: {wav_file}")
 
-    Args:
-        wav_file: Path to input WAV file
-        fs_hint: Override sample rate (Hz)
-        fft_size: FFT size for IRR analysis
-        max_samples: Maximum samples to load for large files
-        output_dir: Output directory for results
+    # Probe file
+    info = sf.info(wav_file)
+    total_frames = int(info.frames)
+    channels = info.channels
+    sr_header = float(info.samplerate)
+    fs = fs_hint if fs_hint is not None else sr_header
+    if channels < 2:
+        raise SanityCheckError(f"Need 2 channels (I,Q), got {channels}")
 
-    Returns:
-        Complete statistics dictionary
+    file_duration_s = total_frames / fs
 
-    Raises:
-        SanityCheckError: If analysis fails
-    """
-    logger.info(f"Starting sanity check for: {wav_file}")
+    # Determine per-chunk frames from memory budget
+    floor_fft = calculate_adaptive_fft_size(fft_size if fft_size else DEFAULT_FFT_SIZE)
+    chunk_frames = compute_chunk_size_samples(mem_budget_mb, channels=channels, floor_fft=floor_fft)
+    use_fft = calculate_adaptive_fft_size(chunk_frames if not fft_size else fft_size)
+
+    logger.info(f"Detected: frames={total_frames:,}, duration={file_duration_s:.2f}s, channels={channels}, fs={fs:,.0f} Hz")
+    logger.info(f"Chunk planning: mem_budget_mb={mem_budget_mb}, chunk_frames={chunk_frames:,}, fft_size={use_fft}")
+
     start_time = time.time()
 
-    # Load WAV file
-    x, sr_header = load_wav_file(wav_file, max_samples)
-    N, C = x.shape
+    # Pass 1: stats + IRR totals across full file
+    ch_stats_partial, irr_db_map = pass1_stats_and_irr(wav_file, fs, use_fft, chunk_frames)
 
-    # Determine sample rate to use
-    fs = fs_hint if fs_hint is not None else sr_header
+    # Decide best convention
+    best_key = max(irr_db_map, key=lambda k: irr_db_map[k])
+    if best_key == "I_Q":
+        best_convention = "I+jQ"
+    elif best_key == "I_neg_Q":
+        best_convention = "I-jQ"
+    else:
+        best_convention = "Q+jI"
+    best_irr_db = float(abs(irr_db_map[best_key]))
 
-    # Validate channel count
-    if C < 2:
-        raise SanityCheckError(f"Need 2 channels (I,Q), got {C}")
+    # Pass 2: envelope kurtosis under best convention (full file)
+    env_kurt = pass2_envelope_kurtosis(wav_file, fs, best_convention, chunk_frames)
 
-    logger.info(f"Processing {N:,} samples at {fs:,.0f} Hz ({N/fs:.3f} seconds)")
+    elapsed = time.time() - start_time
 
-    # Extract I and Q channels
-    I = x[:, 0]
-    Q = x[:, 1]
+    # Build stats
+    I_only = {k: v for k, v in ch_stats_partial.items() if k.startswith("I_")}
+    Q_only = {k: v for k, v in ch_stats_partial.items() if k.startswith("Q_")}
+    nan_total = ch_stats_partial["nan_count"]
+    inf_total = ch_stats_partial["inf_count"]
 
-    # Initialize statistics dictionary
     stats = {
         "analysis_timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
         "input_file": str(wav_file),
-        "frames": int(N),
-        "channels": int(C),
+        "frames": int(total_frames),
+        "channels": int(channels),
         "fs_header_hz": float(sr_header),
         "fs_used_hz": float(fs),
-        "duration_s": float(N / fs),
-        "nan_count": int(np.isnan(x).sum()),
-        "inf_count": int(np.isinf(x).sum()),
+        "file_duration_s": float(file_duration_s),
+        "covered_duration_s": float(file_duration_s),  # full coverage
+        "coverage_fraction": 1.0,
+        "nan_count": int(nan_total),
+        "inf_count": int(inf_total),
+        "sampling_strategy": f"stream_full(mem_budget_mb={mem_budget_mb}, chunk_frames={chunk_frames})",
         "analysis_params": {
-            "fft_size": fft_size or calculate_adaptive_fft_size(N),
-            "max_samples_loaded": max_samples or N,
-            "actual_samples_loaded": N
-        }
+            "fft_size": int(use_fft),
+            "mem_budget_mb": int(mem_budget_mb),
+            "chunk_frames": int(chunk_frames),
+            "passes": 2
+        },
+        **I_only,
+        **Q_only,
+        "best_convention": best_convention,
+        "best_irr_db": best_irr_db,
+        "envelope_kurtosis": float(env_kurt),
+        "analysis_duration_s": float(elapsed)
     }
 
-    # Calculate basic statistics for both channels
-    logger.info("Calculating channel statistics...")
-    stats.update(calculate_basic_statistics(I, "I"))
-    stats.update(calculate_basic_statistics(Q, "Q"))
-
-    # Determine optimal I/Q convention
-    logger.info("Analyzing I/Q conventions...")
-    iq_analysis = determine_optimal_iq_convention(I, Q, fft_size)
-    stats.update(iq_analysis)
-
-    # Calculate envelope kurtosis using best convention
-    if iq_analysis["best_convention"] == "I+jQ":
-        best_complex = (I - np.mean(I)) + 1j * (Q - np.mean(Q))
-    elif iq_analysis["best_convention"] == "I-jQ":
-        best_complex = (I - np.mean(I)) - 1j * (Q - np.mean(Q))
-    else:  # Q+jI
-        best_complex = (Q - np.mean(Q)) + 1j * (I - np.mean(I))
-
-    logger.info("Calculating envelope characteristics...")
-    stats["envelope_kurtosis"] = calculate_envelope_kurtosis(best_complex)
-
-    # Generate quality assessment
-    logger.info("Generating quality assessment...")
     assessment = generate_quality_assessment(stats)
-
-    elapsed_time = time.time() - start_time
-    stats["analysis_duration_s"] = elapsed_time
-
-    logger.info(f"Analysis completed in {elapsed_time:.2f} seconds")
+    logger.info(f"Analysis completed in {elapsed:.2f} seconds")
     logger.info(f"Quality score: {assessment['quality_score']:.1f}/100")
 
     return {**stats, "quality_assessment": assessment}
 
+# --------- CLI ---------
 
 def main():
-    """Main entry point for the sanity check script."""
     parser = argparse.ArgumentParser(
-        description="I/Q Data Sanity Checker for RF Signal Processing",
+        description="I/Q Data Sanity Checker (streaming full-file)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-
-    # Required arguments
-    parser.add_argument(
-        "wav",
-        type=str,
-        help="Input WAV file containing I/Q data"
-    )
-
-    # Optional arguments
-    parser.add_argument(
-        "--fs_hint",
-        type=float,
-        default=None,
-        help="Override sample rate from WAV header (Hz)"
-    )
-
-    parser.add_argument(
-        "--out_dir",
-        type=str,
-        default="out_report",
-        help="Output directory for results"
-    )
-
-    parser.add_argument(
-        "--fft_size",
-        type=int,
-        default=None,
-        help=f"FFT size for IRR analysis (default: adaptive, max {MAX_FFT_SIZE})"
-    )
-
-    parser.add_argument(
-        "--max_samples",
-        type=int,
-        default=DEFAULT_MAX_SAMPLES,
-        help="Maximum samples to load for large files (None for all)"
-    )
-
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging"
-    )
-
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress progress output (errors only)"
-    )
-
+    parser.add_argument("wav", type=str, help="Input WAV file containing I/Q data")
+    parser.add_argument("--fs_hint", type=float, default=None, help="Override sample rate from WAV header (Hz)")
+    parser.add_argument("--out_dir", type=str, default="out_report", help="Base output directory for results")
+    parser.add_argument("--fft_size", type=int, default=None,
+                        help=f"FFT size for IRR analysis per chunk (default adaptive, max {MAX_FFT_SIZE})")
+    parser.add_argument("--mem_budget_mb", type=int, default=512,
+                        help="Approx RAM budget for one chunk (MB). Larger = fewer, bigger chunks.")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--quiet", action="store_true", help="Errors only")
     args = parser.parse_args()
 
-    # Configure logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     elif args.quiet:
         logging.getLogger().setLevel(logging.ERROR)
 
     try:
-        # Validate inputs
         input_file = validate_input_file(args.wav)
-        output_dir = create_output_directory(args.out_dir)
 
-        # Validate FFT size if provided
+        # Ensure fft_size sanity if provided
         if args.fft_size is not None:
-            if args.fft_size < MIN_FFT_SIZE or args.fft_size > MAX_FFT_SIZE:
-                raise SanityCheckError(f"FFT size must be between {MIN_FFT_SIZE} and {MAX_FFT_SIZE}")
-            if args.fft_size & (args.fft_size - 1) != 0:
-                raise SanityCheckError("FFT size must be a power of 2")
+            if args.fft_size < MIN_FFT_SIZE or args.fft_size > MAX_FFT_SIZE or (args.fft_size & (args.fft_size - 1)):
+                raise SanityCheckError(f"fft_size must be a power of 2 within [{MIN_FFT_SIZE}, {MAX_FFT_SIZE}]")
 
-        # Perform sanity check
-        results = perform_sanity_check(
+        # Unique per-run folder
+        run_dir = create_unique_run_directory(args.out_dir, input_file)
+
+        # Run streaming analysis
+        results = perform_sanity_check_streaming(
             wav_file=input_file,
             fs_hint=args.fs_hint,
             fft_size=args.fft_size,
-            max_samples=args.max_samples if args.max_samples > 0 else None,
-            output_dir=output_dir
+            mem_budget_mb=max(64, args.mem_budget_mb),
+            output_dir=run_dir
         )
 
-        # Generate output files
+        # Write outputs
         stats_file, report_file = generate_output_files(
             stats=results,
             assessment=results["quality_assessment"],
             input_file=input_file,
-            output_dir=output_dir
+            output_dir=run_dir
         )
 
-        # Print summary to stdout (for backward compatibility)
+        # Metadata
+        try:
+            meta = {
+                "run_dir": str(run_dir),
+                "input_file": str(input_file),
+                "args": {
+                    "fs_hint": args.fs_hint,
+                    "out_dir_base": args.out_dir,
+                    "fft_size": args.fft_size,
+                    "mem_budget_mb": args.mem_budget_mb,
+                    "verbose": args.verbose,
+                    "quiet": args.quiet,
+                },
+                "created_at": time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            with open(run_dir / "run_metadata.json", "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2, sort_keys=True, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to write run metadata: {e}")
+
         if not args.quiet:
             print(json.dumps(results, indent=2))
+            print(f'\n[INFO] Outputs written to: "{run_dir}"')
 
-        # Print final status
-        quality_score = results["quality_assessment"]["quality_score"]
-        if quality_score >= 80:
+        # Final status
+        quality = results["quality_assessment"]["quality_score"]
+        if quality >= 80:
             logger.info("[OK] I/Q data quality is good")
-        elif quality_score >= 60:
+        elif quality >= 60:
             logger.warning("[WARNING] I/Q data quality is marginal")
         else:
             logger.error("[ERROR] I/Q data quality is poor")
@@ -800,11 +664,9 @@ def main():
         return 1
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return 1
-
 
 if __name__ == "__main__":
     exit(main())

@@ -1,0 +1,13 @@
+{
+  "args": {
+    "fft_size": null,
+    "fs_hint": null,
+    "mem_budget_mb": 512,
+    "out_dir_base": "out_report",
+    "quiet": false,
+    "verbose": false
+  },
+  "created_at": "2025-09-23 15:07:29",
+  "input_file": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test.wav",
+  "run_dir": "out_report\\run_test_20250923_145337"
+}
