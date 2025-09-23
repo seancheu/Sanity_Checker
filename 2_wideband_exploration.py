@@ -13,8 +13,59 @@ import scipy.signal as sig
 import matplotlib.pyplot as plt
 import time
 import sys
+import math
 
 # ---------- Utils ----------
+def block_reduce_2d(A, r_f: int = 1, r_t: int = 1, op: str = "max"):
+    """
+    Downsample 2D array A[F, T] by integer factors r_f, r_t using block reduction.
+    Pads the array so it divides evenly, then applies np.nanmax or np.nanmean.
+    Returns (A_ds, f_idx, t_idx) where idx arrays map reduced bins to original indices.
+    """
+    F, T = A.shape
+    r_f = max(1, int(r_f))
+    r_t = max(1, int(r_t))
+
+    pad_f = (-F) % r_f
+    pad_t = (-T) % r_t
+    if pad_f or pad_t:
+        A = np.pad(A, ((0, pad_f), (0, pad_t)), mode="edge")
+        Fp, Tp = A.shape
+    else:
+        Fp, Tp = F, T
+
+    A = A.reshape(Fp // r_f, r_f, Tp // r_t, r_t)
+    if op == "mean":
+        A_ds = np.nanmean(np.nanmean(A, axis=3), axis=1)
+    else:  # "max" is good for preserving bursts
+        A_ds = np.nanmax(np.nanmax(A, axis=3), axis=1)
+
+    # Build index mapping for axes (take centers of blocks)
+    f_idx = (np.arange(A_ds.shape[0]) * r_f + min(r_f // 2, r_f - 1)).clip(0, F - 1)
+    t_idx = (np.arange(A_ds.shape[1]) * r_t + min(r_t // 2, r_t - 1)).clip(0, T - 1)
+    return A_ds, f_idx.astype(int), t_idx.astype(int)
+
+
+def make_waterfall_thumbnail(S_db, f, t, max_cols: int = 4000, max_rows: int = None, op: str = "max"):
+    """
+    Produce a memory-friendly thumbnail of waterfall.
+    - Limit time columns to max_cols (downsample along T).
+    - Optionally limit frequency rows to max_rows.
+    Returns (S_db_vis, f_vis, t_vis)
+    """
+    F, T = S_db.shape
+    r_t = max(1, math.ceil(T / max_cols)) if max_cols else 1
+    r_f = 1
+    if max_rows:
+        r_f = max(1, math.ceil(F / max_rows))
+
+    S_small, f_idx, t_idx = block_reduce_2d(S_db, r_f=r_f, r_t=r_t, op=op)
+    # Map indices to actual axis values
+    f_vis = f[f_idx] if len(f) == F else np.linspace(f.min(), f.max(), S_small.shape[0])
+    t_vis = t[t_idx] if len(t) == T else np.linspace(t.min(), t.max(), S_small.shape[1])
+    # Keep dtype light
+    return S_small.astype(np.float32, copy=False), f_vis.astype(np.float32), t_vis.astype(np.float32)
+
 def print_progress(msg, elapsed=None):
     """Print progress with optional timing info"""
     if elapsed is not None:
@@ -394,6 +445,10 @@ def main():
     stft_start = time.time()
     f, t, S_db = stft_waterfall(xc, effective_fs, nperseg, noverlap)
     print_progress(f"STFT waterfall ({S_db.shape[0]}×{S_db.shape[1]})", time.time() - stft_start)
+    # Build a visualization thumbnail to avoid huge RGBA allocations in Matplotlib
+    # Keep frequency full, cap time to ~4000 columns. Use max to preserve bursts.
+    S_db_vis, f_vis, t_vis = make_waterfall_thumbnail(S_db, f, t, max_cols=4000, max_rows=None, op="max")
+    print_progress(f"Waterfall thumbnail for plotting: {S_db_vis.shape[0]}×{S_db_vis.shape[1]}")
 
     # CFAR activity mask + occupancy
     cfar_start = time.time()
@@ -418,14 +473,16 @@ def main():
     plt.legend(loc="lower left")
     save_png(Path(args.out, "psd.png"), fig)
 
-    # Waterfall
+    # Waterfall (thumbnail)
     fig = plt.figure(figsize=(10,5))
-    extent=[f[0]/1e6, f[-1]/1e6, t[-1], t[0]]
-    plt.imshow(S_db, aspect="auto", extent=extent, cmap="viridis")
+    extent = [f_vis[0]/1e6, f_vis[-1]/1e6, t_vis[-1], t_vis[0]]
+    plt.imshow(S_db_vis, aspect="auto", extent=extent, cmap="viridis", origin="upper")
     plt.colorbar(label="dB")
-    title = f"Waterfall (STFT magnitude, dB)"
-    if use_sampling:
+    title = "Waterfall (STFT magnitude, dB)"
+    if 'use_sampling' in locals() and use_sampling:
         title += f" - 1:{int(reduction_factor)} sampled"
+    if S_db_vis.shape[1] < (t.size if isinstance(t, np.ndarray) else S_db.shape[1]):
+        title += f" • downsampled to {S_db_vis.shape[1]} cols"
     plt.title(title)
     plt.xlabel("Frequency (MHz)"); plt.ylabel("Time (s)")
     save_png(Path(args.out, "waterfall.png"), fig)
