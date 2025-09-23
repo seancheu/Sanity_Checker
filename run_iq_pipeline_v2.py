@@ -829,6 +829,7 @@ def validate_all_inputs(args) -> Dict[str, Any]:
         'step3_max_slices': (1, 100000),  # Slice limit
         'step3b_win': (256, 65536),  # Window size
         'step3b_min_bw': (1000, 50000000),  # Bandwidth limits
+        'step3b_timeout': (60, 7200),  # Timeout range: 1 min to 2 hours
         'step4_nperseg': (256, 65536),  # FFT size for features
     }
 
@@ -1007,6 +1008,9 @@ def main():
                    help="Output directory for Step-3B slices")
     ap.add_argument("--step3b_path", default=None,
                    help="Working dir for Step-3B (optional)")
+    ap.add_argument("--step3b_timeout", type=int, default=600,
+                   help="Timeout for Step-3B in seconds (default: 600)")
+
     # Step-4 options (Feature extraction)
     ap.add_argument("--step4_script", default="4_feature_extraction.py",
                    help="Path to Step-4 feature extraction script")
@@ -1172,6 +1176,7 @@ def main():
         # --- Step 3B: Signal Slicing for ML ---
         if validated['run_step3b']:
             logger.info("=== Step 3B: Signal Slicing for ML ===")
+            logger.warning("Step 3B can be very slow for large files. Use --skip_step3b to skip this step if needed.")
 
             # Create output directory for slices
             step3b_out_dir = out_base / validated.get('step3b_out', 'slices_out')
@@ -1205,16 +1210,27 @@ def main():
             step3b_cmd = build_secure_command(py_exe, validated['step3b_script'], step3b_args)
 
             logger.info(f"Command: {sanitize_command_for_logging(step3b_cmd)}")
-            rc3b, out3b = execute_step_with_retry(
-                step3b_cmd, "Step-3B",
-                cwd=validated.get('step3b_path'),
-                timeout=args.timeout * 2,  # Allow more time for slicing
-                max_retries=args.max_retries
-            )
 
-            # Set paths for Step 4
-            slices_h5_path = step3b_out_dir / "slices.h5"
-            slices_meta_path = step3b_out_dir / "meta.json"
+            # Use configured timeout for Step 3B
+            step3b_timeout = validated.get('step3b_timeout', 600)
+            logger.info(f"Step 3B timeout set to {step3b_timeout} seconds")
+
+            try:
+                rc3b, out3b = execute_step_with_retry(
+                    step3b_cmd, "Step-3B",
+                    cwd=validated.get('step3b_path'),
+                    timeout=step3b_timeout,
+                    max_retries=1  # Only 1 retry for Step 3B to avoid very long waits
+                )
+                # Set paths for Step 4 only if Step 3B succeeds
+                slices_h5_path = step3b_out_dir / "slices.h5"
+                slices_meta_path = step3b_out_dir / "meta.json"
+            except (TimeoutError, PipelineError) as e:
+                logger.error(f"Step 3B failed or timed out: {e}")
+                logger.warning("Skipping Step 3B due to timeout. Use --skip_step3b to avoid this in future runs.")
+                logger.warning("Or try with a smaller file or --only_step3 to stop before Step 3B.")
+                validated['run_step3b'] = False  # Disable for Step 4 dependency check
+                validated['run_step4'] = False   # Also disable Step 4 since it depends on 3B
 
         # --- Step 4: Feature Extraction ---
         if validated['run_step4']:
