@@ -9,7 +9,7 @@ Step-3: Signal detection & slicing (STREAMING, RAM-safe)
 - Optionally writes audio slices back to WAV files
 
 Usage:
-  python 3_signal_detection_slicing.py your.wav --out out_report\run_<...> \
+  python 3_signal_detection_slicing.py your.wav --out out_report\\run_<...> \
     --fs_hint 20000000 --mem_budget_mb 512 --rms_win_ms 5 --thresh_dbfs -60 \
     --min_dur_ms 5 --gap_ms 3 --pad_ms 2 --write_audio
 
@@ -22,7 +22,6 @@ import argparse
 import csv
 import json
 import math
-import os
 import time
 from pathlib import Path
 from typing import List, Tuple
@@ -30,23 +29,24 @@ from typing import List, Tuple
 import numpy as np
 import soundfile as sf
 
+
 # ---------- helpers ----------
 
 def dbfs(x_rms: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    # x is amplitude in [-1,1]; 0 dBFS corresponds to full-scale sine ~ 0.707 rms (but we take 1.0 as 0 dBFS)
+    # x is amplitude in [-1,1]; 0 dBFS ~= full-scale amplitude 1.0
     return 20.0 * np.log10(np.maximum(x_rms, eps))
+
 
 def running_rms_mag(block_mag: np.ndarray, win: int) -> np.ndarray:
     """
-    Block-based RMS over magnitude envelope using cumulative sum of squares.
-    Returns an array of length len(block_mag) with windowed RMS (centered via causal window).
+    RMS over magnitude envelope using cumulative sum of squares.
+    Causal window; handles warm-up with smaller window.
     """
     if win <= 1:
         return block_mag.astype(np.float64, copy=False)
     x = block_mag.astype(np.float64, copy=False)
     cs = np.cumsum(x * x)
     out = np.empty_like(x)
-    # y[n] = sqrt((cs[n] - cs[n-win])/win), handle beginning with smaller window
     for n in range(len(x)):
         a = 0 if n - win < 0 else cs[n - win]
         b = cs[n]
@@ -54,11 +54,13 @@ def running_rms_mag(block_mag: np.ndarray, win: int) -> np.ndarray:
         out[n] = math.sqrt((b - a) / max(1, w))
     return out
 
-def merge_intervals(active: np.ndarray, fs: float, min_dur_ms: float, gap_ms: float, pad_ms: float) -> List[Tuple[int,int]]:
+
+def merge_intervals(active: np.ndarray, fs: float,
+                    min_dur_ms: float, gap_ms: float, pad_ms: float) -> List[Tuple[int, int]]:
     """
-    Convert boolean activity vector into merged [start,end) sample intervals
+    Convert boolean activity vector into merged [start,end) sample intervals.
     - min_dur_ms: minimum active duration
-    - gap_ms: merge if inactive gaps shorter than this
+    - gap_ms: merge if inactive gaps smaller than this
     - pad_ms: extend each interval on both sides
     """
     N = active.size
@@ -66,7 +68,7 @@ def merge_intervals(active: np.ndarray, fs: float, min_dur_ms: float, gap_ms: fl
     if idx.size == 0:
         return []
 
-    # Find contiguous runs
+    # Find contiguous runs within the chunk
     runs = []
     start = idx[0]
     prev = idx[0]
@@ -102,14 +104,16 @@ def merge_intervals(active: np.ndarray, fs: float, min_dur_ms: float, gap_ms: fl
             final.append((s2, e2))
     return final
 
-def compute_chunk_frames(mem_budget_mb: int, channels: int, floor: int = 1<<18) -> int:
-    """Choose chunk frames so chunk*channels*4B <= mem_budget and >= floor."""
+
+def compute_chunk_frames(mem_budget_mb: int, channels: int, floor: int = 1 << 18) -> int:
+    """Choose chunk frames so chunk*channels*4B <= mem_budget and >= floor (float32)."""
     mem_bytes = max(64, mem_budget_mb) * 1024 * 1024
     max_frames = mem_bytes // (channels * 4)
     if max_frames < floor:
         return floor
     k = max(1, max_frames // floor)
     return int(min(k * floor, 16 * 1024 * 1024))  # cap ~16M
+
 
 # ---------- main ----------
 
@@ -130,7 +134,9 @@ def main():
     ap.add_argument("--max_slices", type=int, default=1000, help="Safety cap for number of slices")
     args = ap.parse_args()
 
+    print("[INFO] Step-3 starting...", flush=True)
     t0 = time.time()
+
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     slices_dir = out_dir / "slices"
@@ -145,20 +151,20 @@ def main():
     if C < 2:
         raise SystemExit(f"Expected stereo I/Q, got {C} channel(s).")
 
-    print(f"[INFO] WAV: {args.wav}")
-    print(f"[INFO] Fs: {fs/1e6:.3f} MHz  Channels: {C}  Frames: {N_total:,}  Duration: {N_total/fs:.2f}s")
+    print(f"[INFO] WAV: {args.wav}", flush=True)
+    print(f"[INFO] Fs: {fs/1e6:.3f} MHz  Channels: {C}  Frames: {N_total:,}  Duration: {N_total/fs:.2f}s", flush=True)
 
-    chunk_frames = compute_chunk_frames(args.mem_budget_mb, channels=C, floor=1<<18)
-    print(f"[INFO] Streaming in chunks of {chunk_frames:,} frames (~{chunk_frames/fs:.3f}s/chunk)")
+    chunk_frames = compute_chunk_frames(args.mem_budget_mb, channels=C, floor=1 << 18)
+    print(f"[INFO] Streaming in chunks of {chunk_frames:,} frames (~{chunk_frames/fs:.3f}s/chunk)", flush=True)
 
-    # First pass: build activity vector (True/False) over entire file at sample rate.
-    # To avoid allocating N_total booleans for huge files, we collect intervals per chunk and map to global.
+    # First pass: collect activity intervals per chunk (avoid huge arrays)
     intervals_global: List[Tuple[int, int]] = []
 
     win_samps = max(1, int(round(fs * (args.rms_win_ms / 1000.0))))
     thresh = float(args.thresh_dbfs)
 
     start_frame = 0
+    last_log = time.time()
     with sf.SoundFile(args.wav, "r") as f:
         while start_frame < N_total:
             f.seek(start_frame)
@@ -170,36 +176,38 @@ def main():
             # Magnitude envelope from I/Q
             I = block[:, 0]
             Q = block[:, 1]
-            mag = np.sqrt(I.astype(np.float64)**2 + Q.astype(np.float64)**2)
+            mag = np.sqrt(I.astype(np.float64) ** 2 + Q.astype(np.float64) ** 2)
 
-            # Short-term RMS (causal window), convert to dBFS
+            # Short-term RMS -> dBFS -> threshold
             rms = running_rms_mag(mag, win_samps)
             db = dbfs(rms)
-
-            # Active where above threshold
             active = db > thresh
 
-            # Merge within chunk → local intervals
+            # Intervals in this chunk
             local = merge_intervals(active, fs, args.min_dur_ms, args.gap_ms, args.pad_ms)
 
-            # Map local intervals to global sample indices
+            # Map to global sample indices
             for s, e in local:
-                gs = s + start_frame
-                ge = e + start_frame
-                intervals_global.append((gs, ge))
+                intervals_global.append((s + start_frame, e + start_frame))
+
+            # Progress (every ~2s)
+            if time.time() - last_log > 2.0:
+                pct = 100.0 * (start_frame + to_read) / max(1, N_total)
+                print(f"[{pct:6.2f}%] processed {start_frame + to_read:,} / {N_total:,} frames", flush=True)
+                last_log = time.time()
 
             start_frame += to_read
 
     # Second pass: merge global intervals across chunk boundaries
     if not intervals_global:
-        print("[INFO] No activity detected above threshold.")
+        print("[INFO] No activity detected above threshold.", flush=True)
         intervals_merged = []
     else:
         intervals_global.sort()
         merged = []
         cur_s, cur_e = intervals_global[0]
         for s, e in intervals_global[1:]:
-            if s <= cur_e:  # overlap/adjacent
+            if s <= cur_e:
                 cur_e = max(cur_e, e)
             else:
                 merged.append((cur_s, cur_e))
@@ -209,7 +217,7 @@ def main():
 
     # Cap number of slices
     if len(intervals_merged) > args.max_slices:
-        print(f"[WARN] Detected {len(intervals_merged)} slices; capping to first {args.max_slices}.")
+        print(f"[WARN] Detected {len(intervals_merged)} slices; capping to first {args.max_slices}.", flush=True)
         intervals_merged = intervals_merged[:args.max_slices]
 
     # Write metadata
@@ -230,6 +238,7 @@ def main():
         "num_slices": len(intervals_merged)
     }
     (out_dir / "slices_meta.json").write_text(json.dumps(meta, indent=2))
+    print(f"[INFO] Wrote {out_dir/'slices_meta.json'}", flush=True)
 
     with open(out_dir / "slices.csv", "w", newline="") as fcsv:
         w = csv.writer(fcsv)
@@ -237,7 +246,7 @@ def main():
         for i, (s, e) in enumerate(intervals_merged):
             w.writerow([i, s, e, s / fs, e / fs, (e - s) * 1000.0 / fs])
 
-    print(f"[INFO] Slices found: {len(intervals_merged)} (metadata written to {out_dir/'slices.csv'})")
+    print(f"[INFO] Slices found: {len(intervals_merged)} (metadata written to {out_dir/'slices.csv'})", flush=True)
 
     # Optional: write audio slices as .wav (still streaming)
     if args.write_audio and intervals_merged:
@@ -245,20 +254,20 @@ def main():
             for i, (s, e) in enumerate(intervals_merged):
                 f.seek(s)
                 frames = e - s
-                # stream write in sub-chunks to avoid big allocations
                 out_path = slices_dir / f"slice_{i:05d}.wav"
                 with sf.SoundFile(out_path, "w", samplerate=int(fs), channels=C, subtype="PCM_16") as out_f:
                     remaining = frames
                     while remaining > 0:
-                        n = min(262144, remaining)
+                        n = min(262_144, remaining)
                         blk = f.read(n, always_2d=True, dtype="float32")
                         if blk.size == 0:
                             break
                         out_f.write(blk)
                         remaining -= blk.shape[0]
-        print(f"[INFO] Wrote {len(intervals_merged)} WAV slices to {slices_dir}")
+        print(f"[INFO] Wrote {len(intervals_merged)} WAV slices to {slices_dir}", flush=True)
 
-    print(f"[DONE] Step-3 completed in {time.time() - t0:.2f}s")
+    print(f"[DONE] Step-3 completed in {time.time() - t0:.2f}s", flush=True)
+
 
 if __name__ == "__main__":
     main()
