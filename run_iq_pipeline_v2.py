@@ -8,8 +8,9 @@ Main runner that orchestrates (all steps enabled by default):
   3) 3_signal_detection_slicing.py (streaming RMS-based detection & optional slicing)
   3B) Original signal slicing script (creates HDF5 slices for ML)
   4) 4_feature_extraction.py (extract features from slices)
+  5) 5_inference.py (wideband classification inference)
 
-By default, runs all steps 1-4. Use --only_stepX or --skip_stepX to control execution.
+By default, runs all steps 1-5. Use --only_stepX or --skip_stepX to control execution.
 
 Security improvements:
 - Input validation and sanitization to prevent command injection
@@ -27,7 +28,10 @@ Usage:
   python run_iq_pipeline_v2.py "C:\path\to\your.wav" --fs_hint 20000000 --only_step2
 
   # Skip certain steps:
-  python run_iq_pipeline_v2.py "C:\path\to\your.wav" --fs_hint 20000000 --skip_step4
+  python run_iq_pipeline_v2.py "C:\path\to\your.wav" --fs_hint 20000000 --skip_step5
+
+  # Run inference only (requires existing model and labels):
+  python run_iq_pipeline_v2.py "C:\path\to\your.wav" --fs_hint 20000000 --only_step1 --step5_auto_vad
 """
 
 import argparse
@@ -367,6 +371,31 @@ def check_write_permissions(path: Path) -> None:
         test_file.unlink()
     except (PermissionError, OSError) as e:
         raise PermissionError(f"Cannot write to directory {path}: {e}")
+
+def detect_wav_format(file_path: Path) -> Tuple[bool, str]:
+    """
+    Detect WAV file format (RIFF WAV vs RF64).
+
+    Args:
+        file_path: Path to the file
+
+    Returns:
+        Tuple of (is_wav_format, format_type)
+        format_type: 'RIFF', 'RF64', or 'UNKNOWN'
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(4)
+
+        if header == b'RIFF':
+            return True, 'RIFF'
+        elif header == b'RF64':
+            return True, 'RF64'
+        else:
+            return False, 'UNKNOWN'
+    except (OSError, IOError) as e:
+        logger.warning(f"Could not read file header: {e}")
+        return False, 'UNKNOWN'
 
 # ---------- Secure Subprocess Functions ----------
 
@@ -775,10 +804,19 @@ def validate_all_inputs(args) -> Dict[str, Any]:
     # Validate WAV file
     validated['wav_path'] = validate_file_path(args.wav, must_exist=True, allow_parent_dirs=allow_parent_dirs)
 
-    # Check file format
+    # Check file format and detect WAV type
     wav_path = validated['wav_path']
     if wav_path.suffix.lower() not in ['.wav', '.wave']:
         logger.warning(f"File extension '{wav_path.suffix}' is not .wav")
+
+    # Detect WAV format (RIFF vs RF64)
+    is_wav_format, wav_format = detect_wav_format(wav_path)
+    if is_wav_format:
+        logger.info(f"Detected {wav_format} WAV format")
+        if wav_format == 'RF64':
+            logger.info("RF64 format detected - optimized for large files (>4GB)")
+    else:
+        logger.warning(f"Unknown file format detected: {wav_format}")
 
     # Check file size
     check_file_size_limits(wav_path)
@@ -804,7 +842,8 @@ def validate_all_inputs(args) -> Dict[str, Any]:
         'run_step2': not args.only_step1,
         'run_step3': not args.only_step1 and not args.only_step2,
         'run_step3b': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.skip_step3b,
-        'run_step4': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.only_step3b and not args.skip_step4
+        'run_step4': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.only_step3b and not args.skip_step4,
+        'run_step5': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.only_step3b and not args.only_step4 and not args.skip_step5
     }
     validated.update(step_control)
 
@@ -813,6 +852,8 @@ def validate_all_inputs(args) -> Dict[str, Any]:
         validated['step3b_script'] = validate_script_path(args.step3b_script)
     if step_control['run_step4']:
         validated['step4_script'] = validate_script_path(args.step4_script)
+    if step_control['run_step5']:
+        validated['step5_script'] = validate_script_path(args.step5_script)
 
     # Validate Python interpreter
     validated['python'] = validate_python_executable(args.python)
@@ -831,6 +872,8 @@ def validate_all_inputs(args) -> Dict[str, Any]:
         'step3b_min_bw': (1000, 50000000),  # Bandwidth limits
         'step3b_timeout': (60, 7200),  # Timeout range: 1 min to 2 hours
         'step4_nperseg': (256, 65536),  # FFT size for features
+        'step5_batch_size': (1, 1024),  # Inference batch size
+        'step5_timeout': (60, 7200),  # Timeout range: 1 min to 2 hours
     }
 
     for param, (min_val, max_val) in integer_validations.items():
@@ -853,6 +896,7 @@ def validate_all_inputs(args) -> Dict[str, Any]:
         'step3b_hop_frac': (0.1, 1.0),  # Hop fraction
         'step3b_oversample': (1.0, 10.0),  # Oversampling factor
         'step4_overlap': (0.0, 1.0),  # Overlap fraction for features
+        'step5_seg': (1.0, 300.0),  # Chunk duration for inference
     }
 
     for param, (min_val, max_val) in float_validations.items():
@@ -861,17 +905,17 @@ def validate_all_inputs(args) -> Dict[str, Any]:
             validated[param] = validate_numeric_param(value, param, min_val, max_val, 'float')
 
     # Validate boolean flags
-    bool_params = ['force_full', 'step3_write_audio', 'step4_emit_h5']
+    bool_params = ['force_full', 'step3_write_audio', 'step4_emit_h5', 'step5_auto_vad']
     for param in bool_params:
         validated[param] = getattr(args, param)
 
     # Validate string parameters
-    string_params = ['step3b_mode', 'step4_extras', 'step3b_out', 'step4_out']
+    string_params = ['step3b_mode', 'step4_extras', 'step3b_out', 'step4_out', 'step5_out', 'step5_device']
     for param in string_params:
         validated[param] = getattr(args, param)
 
     # Validate optional working directories
-    for param in ['sanity_path', 'step2_path', 'step3_path', 'step3b_path', 'step4_path']:
+    for param in ['sanity_path', 'step2_path', 'step3_path', 'step3b_path', 'step4_path', 'step5_path']:
         path_val = getattr(args, param)
         if path_val:
             validated[param] = str(validate_output_dir(path_val))
@@ -931,7 +975,7 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    ap.add_argument("wav", help="Path to I/Q .wav (stereo)")
+    ap.add_argument("wav", help="Path to I/Q .wav file (stereo, supports RIFF and RF64 formats)")
     ap.add_argument("--fs_hint", type=float, default=None,
                    help="Override WAV header Fs (Hz)")
     ap.add_argument("--out_dir", default="out_report",
@@ -1027,6 +1071,28 @@ def main():
     ap.add_argument("--step4_path", default=None,
                    help="Working dir for Step-4 (optional)")
 
+    # Step-5 options (Inference)
+    ap.add_argument("--step5_script", default="5_inference.py",
+                   help="Path to Step-5 inference script")
+    ap.add_argument("--step5_model", default="Model/best_model_script_cuda.pt",
+                   help="Path to TorchScript model file")
+    ap.add_argument("--step5_labels", default="Model/selected_labels.json",
+                   help="Path to labels JSON file")
+    ap.add_argument("--step5_device", default="cuda", choices=["cuda", "cpu"],
+                   help="Device for inference (cuda/cpu)")
+    ap.add_argument("--step5_seg", type=float, default=10.0,
+                   help="Chunk duration in seconds for inference")
+    ap.add_argument("--step5_batch_size", type=int, default=64,
+                   help="Batch size for inference")
+    ap.add_argument("--step5_auto_vad", action="store_true",
+                   help="Enable automatic VAD for inference")
+    ap.add_argument("--step5_out", default="step5_out",
+                   help="Output directory for Step-5 inference results")
+    ap.add_argument("--step5_path", default=None,
+                   help="Working dir for Step-5 (optional)")
+    ap.add_argument("--step5_timeout", type=int, default=1200,
+                   help="Timeout for Step-5 in seconds (default: 1200)")
+
     # Step control options
     ap.add_argument("--only_step1", action="store_true",
                    help="Run only Step 1 (sanity check)")
@@ -1036,10 +1102,14 @@ def main():
                    help="Run only Steps 1-3 (up to basic signal detection)")
     ap.add_argument("--only_step3b", action="store_true",
                    help="Run only Steps 1-3B (up to ML signal slicing)")
+    ap.add_argument("--only_step4", action="store_true",
+                   help="Run only Steps 1-4 (up to feature extraction)")
     ap.add_argument("--skip_step3b", action="store_true",
                    help="Skip Step 3B (ML signal slicing)")
     ap.add_argument("--skip_step4", action="store_true",
                    help="Skip Step 4 (feature extraction)")
+    ap.add_argument("--skip_step5", action="store_true",
+                   help="Skip Step 5 (inference)")
 
     # General options
     ap.add_argument("--python", default=None,
@@ -1274,6 +1344,60 @@ def main():
                 max_retries=args.max_retries
             )
 
+        # --- Step 5: Inference ---
+        if validated['run_step5']:
+            logger.info("=== Step 5: Inference ===")
+
+            # Create output directory for inference
+            step5_out_dir = out_base / validated.get('step5_out', 'step5_out')
+            step5_out_dir.mkdir(parents=True, exist_ok=True)
+
+            # Validate required model and labels files exist
+            model_path = Path(validated.get('step5_model', 'Model/best_model_script_cuda.pt'))
+            labels_path = Path(validated.get('step5_labels', 'Model/selected_labels.json'))
+
+            if not model_path.exists():
+                logger.error(f"Required model file not found: {model_path}")
+                raise PipelineError(f"Step 5 requires model file: {model_path}")
+
+            if not labels_path.exists():
+                logger.error(f"Required labels file not found: {labels_path}")
+                raise PipelineError(f"Step 5 requires labels file: {labels_path}")
+
+            step5_args = {
+                'in': str(wav_path),
+                'model_ts': str(model_path),
+                'labels_json': str(labels_path),
+                'out_dir': str(step5_out_dir),
+                'device': validated.get('step5_device', 'cuda'),
+                'seg': validated.get('step5_seg', 10.0),
+                'batch_size': validated.get('step5_batch_size', 64),
+                'tag': f"pipeline_{wav_path.stem}"
+            }
+
+            # Add sample rate if available
+            if validated.get('fs_hint'):
+                step5_args['sr'] = validated['fs_hint']
+
+            # Add auto VAD if enabled
+            if validated.get('step5_auto_vad'):
+                step5_args['auto_vad'] = True
+
+            step5_cmd = build_secure_command(py_exe, validated['step5_script'], step5_args)
+
+            logger.info(f"Command: {sanitize_command_for_logging(step5_cmd)}")
+
+            # Use configured timeout for Step 5
+            step5_timeout = validated.get('step5_timeout', 1200)
+            logger.info(f"Step 5 timeout set to {step5_timeout} seconds")
+
+            rc5, out5 = execute_step_with_retry(
+                step5_cmd, "Step-5",
+                cwd=validated.get('step5_path'),
+                timeout=step5_timeout,
+                max_retries=args.max_retries
+            )
+
         # Success
         logger.info("=== Pipeline Completed Successfully ===")
         logger.info(f"All outputs in: {run_dir}")
@@ -1281,6 +1405,8 @@ def main():
             logger.info(f"Slices in: {step3b_out_dir}")
         if validated['run_step4'] and 'step4_out_dir' in locals():
             logger.info(f"Features in: {step4_out_dir}")
+        if validated['run_step5'] and 'step5_out_dir' in locals():
+            logger.info(f"Inference in: {step5_out_dir}")
 
         # Don't clean up successful runs
         if run_dir in cleanup_dirs:

@@ -1,0 +1,14 @@
+[
+    "OOK",
+    "BPSK",
+    "QPSK",
+    "8PSK",
+    "16QAM",
+    "64QAM",
+    "256QAM",
+    "AM-SSB-WC",
+    "AM-SSB-SC",
+    "FM",
+    "GMSK",
+    "OQPSK"
+  ]

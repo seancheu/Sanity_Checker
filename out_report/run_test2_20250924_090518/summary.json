@@ -1,0 +1,30 @@
+{
+  "wav": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav",
+  "fs_header_hz": 2048000.0,
+  "fs_used_hz": 20000000.0,
+  "original_fs_hz": 20000000.0,
+  "duration_s": 23.400448,
+  "original_duration_s": 23.400448,
+  "samples_processed": 468008960,
+  "original_samples": 468008960,
+  "nperseg": 4096,
+  "overlap": 0.5,
+  "noise_floor_db": -108.31598663330078,
+  "num_carriers": 12,
+  "cfar": {
+    "k": 3.0,
+    "guard": 1,
+    "train": 6
+  },
+  "prom_db": 8.0,
+  "optimization": {
+    "used_sampling": false,
+    "reduction_factor": 1.0,
+    "target_duration_s": 60.0,
+    "memory_estimate_mb": 10711.828125,
+    "waterfall_shape": [
+      4096,
+      228519
+    ]
+  }
+}

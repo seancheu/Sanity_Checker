@@ -1,11 +1,11 @@
 #python analyze_iq_unknown.py your_20MHz.wav --fs_hint 20000000 --out out_report --nperseg 4096 --overlap 0.5 --prom_db 8 --cfar_k 3.0
 
-#If the PSD marks too many tiny peaks, raise --prom_db to 10–12.
-#If the waterfall mask is too “speckly”, raise --cfar_k to 3.5–4.0 (stricter).
+#If the PSD marks too many tiny peaks, raise --prom_db to 10-12.
+#If the waterfall mask is too "speckly", raise --cfar_k to 3.5-4.0 (stricter).
 #If Step-1 told you to swap/flip I/Q, add --conv I-Q or --conv Q+I.
 
-# analyze_iq_unknown.py — Step 2: PSD, waterfall, occupancy, carrier table
-import argparse, json, csv
+# analyze_iq_unknown.py - Step 2: PSD, waterfall, occupancy, carrier table
+import argparse, json, csv, os, glob
 from pathlib import Path
 import numpy as np
 import soundfile as sf
@@ -14,6 +14,77 @@ import matplotlib.pyplot as plt
 import time
 import sys
 import math
+
+# ---------- IRR Calculation (from Step 1) ----------
+EPSILON = 1e-12
+DEFAULT_FFT_SIZE = 1 << 18  # 262144
+
+def calculate_adaptive_fft_size(num_samples: int, target_size: int = DEFAULT_FFT_SIZE) -> int:
+    max_size = min(target_size, num_samples)
+    if max_size < 2:
+        return 1 << 12  # MIN_FFT_SIZE = 4096
+    fft_size = 1 << (max_size.bit_length() - 1)
+    return max(1 << 12, min(1 << 20, fft_size))  # MIN=4096, MAX=1048576
+
+def irr_pos_neg_powers(complex_signal: np.ndarray, fft_size: int):
+    """Return (pos_power, neg_power) from a segment."""
+    if complex_signal.size < fft_size:
+        # center-pad with zeros if needed
+        pad = fft_size - complex_signal.size
+        left = pad // 2
+        right = pad - left
+        complex_signal = np.pad(complex_signal, (left, right), mode='constant')
+    else:
+        # center crop
+        start = (complex_signal.size - fft_size) // 2
+        complex_signal = complex_signal[start:start+fft_size]
+
+    X = np.fft.fftshift(np.fft.fft(complex_signal, n=fft_size))
+    P = (np.abs(X) ** 2).astype(np.float64)
+    mid = P.size // 2
+    pos = float(P[mid+1:].sum() + EPSILON)
+    neg = float(P[:mid].sum() + EPSILON)
+    return pos, neg
+
+def calculate_irr_db(xc: np.ndarray, fft_size: int = None) -> float:
+    """Calculate IRR in dB for complex I/Q signal."""
+    if fft_size is None:
+        fft_size = calculate_adaptive_fft_size(len(xc))
+
+    # Remove DC for stability
+    xc_dc = xc - np.mean(xc)
+
+    # Calculate pos/neg powers
+    pos, neg = irr_pos_neg_powers(xc_dc, fft_size)
+
+    # Return IRR in dB
+    return 10.0 * np.log10(pos / (neg + EPSILON))
+
+def read_step1_irr(step1_output_dir: str) -> dict:
+    """Read IRR values from Step 1 output if available."""
+    try:
+        # Look for Step 1 JSON files
+        pattern = os.path.join(step1_output_dir, "**/sanity_check_*_stats.json")
+        json_files = glob.glob(pattern, recursive=True)
+
+        if not json_files:
+            print_progress("No Step 1 IRR data found")
+            return {}
+
+        # Use the most recent file
+        latest_file = max(json_files, key=os.path.getctime)
+
+        with open(latest_file, 'r') as f:
+            step1_data = json.load(f)
+
+        return {
+            "step1_best_convention": step1_data.get("best_convention", "Unknown"),
+            "step1_best_irr_db": step1_data.get("best_irr_db", 0.0),
+            "step1_file": latest_file
+        }
+    except Exception as e:
+        print_progress(f"Could not read Step 1 IRR data: {e}")
+        return {}
 
 # ---------- Utils ----------
 def block_reduce_2d(A, r_f: int = 1, r_t: int = 1, op: str = "max"):
@@ -238,7 +309,7 @@ def cfar_mask_chunked(S_db, guard=1, train=6, k=3.0, max_chunk_size=1000):
     if F * T < 1e6:
         return cfar_mask_original(S_db, guard, train, k)
 
-    print_progress(f"Computing CFAR mask ({F}×{T}) with chunked processing...")
+    print_progress(f"Computing CFAR mask ({F}x{T}) with chunked processing...")
     start_time = time.time()
 
     # Chunked time-axis CFAR
@@ -378,6 +449,7 @@ def main():
     # New optimization parameters
     ap.add_argument("--max_duration", type=float, default=60.0, help="Max processing duration (s) for large files")
     ap.add_argument("--force_full", action="store_true", help="Force full processing (disable sampling)")
+    ap.add_argument("--step1_dir", default="out_report", help="Step 1 output directory for IRR comparison")
     args = ap.parse_args()
 
     overall_start = time.time()
@@ -433,6 +505,42 @@ def main():
     xc = dc_remove(xc)
     print_progress(f"I/Q conversion completed", time.time() - iq_start)
 
+    # IRR Analysis and Comparison with Step 1
+    irr_start = time.time()
+
+    # Read Step 1 IRR data if available
+    step1_irr = read_step1_irr(args.step1_dir)
+
+    # Calculate corrected IRR after applying --conv
+    corrected_irr_db = calculate_irr_db(xc)
+    print_progress(f"IRR calculation completed", time.time() - irr_start)
+
+    # IRR comparison and reporting
+    if step1_irr:
+        step1_irr_db = step1_irr.get("step1_best_irr_db", 0.0)
+        step1_convention = step1_irr.get("step1_best_convention", "Unknown")
+        irr_improvement_db = corrected_irr_db - step1_irr_db
+
+        print_progress(f"IRR Comparison:")
+        print_progress(f"  Step 1 (best): {step1_irr_db:.2f} dB ({step1_convention})")
+        print_progress(f"  Step 2 (corrected): {corrected_irr_db:.2f} dB (--conv {args.conv})")
+        print_progress(f"  Improvement: {irr_improvement_db:+.2f} dB")
+
+        if irr_improvement_db > 5.0:
+            print_progress(f"[OK] Significant IRR improvement - correction is effective!")
+        elif irr_improvement_db > 1.0:
+            print_progress(f"[OK] Moderate IRR improvement")
+        elif irr_improvement_db > -1.0:
+            print_progress(f"[WARN] Minimal change in IRR")
+        else:
+            print_progress(f"[ERROR] IRR degraded - check --conv parameter")
+    else:
+        step1_irr_db = None
+        step1_convention = "Unknown"
+        irr_improvement_db = None
+        print_progress(f"Corrected IRR: {corrected_irr_db:.2f} dB (--conv {args.conv})")
+        print_progress(f"[WARN] No Step 1 data found for comparison")
+
     # PSD (Welch) - always compute on effective data
     psd_start = time.time()
     f_psd, Pxx = welch_psd(xc, effective_fs, nperseg, noverlap)
@@ -444,11 +552,11 @@ def main():
     # Waterfall (STFT)
     stft_start = time.time()
     f, t, S_db = stft_waterfall(xc, effective_fs, nperseg, noverlap)
-    print_progress(f"STFT waterfall ({S_db.shape[0]}×{S_db.shape[1]})", time.time() - stft_start)
+    print_progress(f"STFT waterfall ({S_db.shape[0]}x{S_db.shape[1]})", time.time() - stft_start)
     # Build a visualization thumbnail to avoid huge RGBA allocations in Matplotlib
     # Keep frequency full, cap time to ~4000 columns. Use max to preserve bursts.
     S_db_vis, f_vis, t_vis = make_waterfall_thumbnail(S_db, f, t, max_cols=4000, max_rows=None, op="max")
-    print_progress(f"Waterfall thumbnail for plotting: {S_db_vis.shape[0]}×{S_db_vis.shape[1]}")
+    print_progress(f"Waterfall thumbnail for plotting: {S_db_vis.shape[0]}x{S_db_vis.shape[1]}")
 
     # CFAR activity mask + occupancy
     cfar_start = time.time()
@@ -482,7 +590,7 @@ def main():
     if 'use_sampling' in locals() and use_sampling:
         title += f" - 1:{int(reduction_factor)} sampled"
     if S_db_vis.shape[1] < (t.size if isinstance(t, np.ndarray) else S_db.shape[1]):
-        title += f" • downsampled to {S_db_vis.shape[1]} cols"
+        title += f" - downsampled to {S_db_vis.shape[1]} cols"
     plt.title(title)
     plt.xlabel("Frequency (MHz)"); plt.ylabel("Time (s)")
     save_png(Path(args.out, "waterfall.png"), fig)
@@ -512,7 +620,7 @@ def main():
                np.c_[t, time_burstiness], delimiter=",",
                header="time_s,activity", comments="")
 
-    # Enhanced summary with optimization info
+    # Enhanced summary with optimization info and IRR comparison
     effective_duration = N / effective_fs
     summary = {
         "wav": str(Path(args.wav).resolve()),
@@ -535,6 +643,14 @@ def main():
             "target_duration_s": float(args.max_duration),
             "memory_estimate_mb": float(mem_est_mb),
             "waterfall_shape": [int(S_db.shape[0]), int(S_db.shape[1])]
+        },
+        "irr_analysis": {
+            "conv_applied": args.conv,
+            "corrected_irr_db": float(corrected_irr_db),
+            "step1_irr_db": float(step1_irr_db) if step1_irr_db is not None else None,
+            "step1_convention": step1_convention,
+            "irr_improvement_db": float(irr_improvement_db) if irr_improvement_db is not None else None,
+            "step1_file": step1_irr.get("step1_file", None) if step1_irr else None
         }
     }
     Path(args.out, "summary.json").write_text(json.dumps(summary, indent=2))

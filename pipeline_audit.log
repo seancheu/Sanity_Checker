@@ -151,3 +151,118 @@
 2025-09-23 22:06:17,629 - __main__ - INFO - === Step 3B: Signal Slicing for ML ===
 2025-09-23 22:06:17,630 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing_original.py ...13-27-07_538000000Hz-006.wav --fs_hint 20000000.0 --carriers_csv ...carriers.csv --mode carriers --win 16384 --hop_frac 0.5 --oversample 4.0 --min_bw 100000 --out ...slices_out
 2025-09-23 22:06:17,630 - __main__ - INFO - [Step-3B] Attempt 1/3
+2025-09-24 08:44:45,341 - __main__ - INFO - Validating system resources...
+2025-09-24 08:44:45,341 - __main__ - WARNING - psutil not available, skipping resource validation
+2025-09-24 08:44:45,341 - __main__ - INFO - Validating inputs...
+2025-09-24 08:44:45,345 - __main__ - WARNING - Large file detected: 22.7GB
+2025-09-24 08:44:45,347 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\test.wav
+2025-09-24 08:44:45,347 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-24 08:44:45,347 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-24 08:44:45,347 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py C:\Users\Sean_Temp\Documents\Test_files\test.wav --out_dir ...out_report --mem_budget_mb 512
+2025-09-24 08:44:45,347 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-24 08:44:45,427 - __main__ - WARNING - [Step-1] Process failed with return code 1
+2025-09-24 08:44:45,427 - __main__ - INFO - [Step-1] Retrying in 30 seconds...
+2025-09-24 08:44:53,831 - __main__ - INFO - Received signal SIGINT, cleaning up...
+2025-09-24 09:05:09,034 - __main__ - INFO - Validating system resources...
+2025-09-24 09:05:09,034 - __main__ - WARNING - psutil not available, skipping resource validation
+2025-09-24 09:05:09,034 - __main__ - INFO - Validating inputs...
+2025-09-24 09:05:09,034 - __main__ - ERROR - Pipeline failed: Invalid characters detected in file path
+2025-09-24 09:05:16,253 - __main__ - INFO - Validating system resources...
+2025-09-24 09:05:16,254 - __main__ - WARNING - psutil not available, skipping resource validation
+2025-09-24 09:05:16,254 - __main__ - INFO - Validating inputs...
+2025-09-24 09:05:16,254 - __main__ - INFO - Detected RF64 WAV format
+2025-09-24 09:05:16,254 - __main__ - INFO - RF64 format detected - optimized for large files (>4GB)
+2025-09-24 09:05:16,257 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\test2.wav
+2025-09-24 09:05:16,257 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-24 09:05:16,257 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-24 09:05:16,257 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out_dir ...out_report --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-24 09:05:16,258 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-24 09:06:15,977 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-24 09:06:15,978 - __main__ - INFO - Extracted JSON successfully: Q+jI
+2025-09-24 09:06:15,978 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-24 09:06:15,978 - __main__ - INFO - Found run directory from output: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\run_test2_20250924_090518
+2025-09-24 09:06:15,978 - __main__ - INFO - Run directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\run_test2_20250924_090518
+2025-09-24 09:06:15,978 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-24 09:06:15,978 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-24 09:06:15,978 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out ...run_test2_20250924_090518 --conv Q+I --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --max_duration 60.0 --fs_hint 20000000.0
+2025-09-24 09:06:15,979 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-24 09:21:04,114 - __main__ - INFO - [Step-2] Completed successfully
+2025-09-24 09:21:04,114 - __main__ - INFO - === Step 3: Signal Detection & Slicing ===
+2025-09-24 09:21:04,114 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out ...run_test2_20250924_090518 --mem_budget_mb 512 --rms_win_ms 5.0 --thresh_dbfs -60.0 --min_dur_ms 5.0 --gap_ms 3.0 --pad_ms 2.0 --max_slices 1000 --fs_hint 20000000.0
+2025-09-24 09:21:04,114 - __main__ - INFO - [Step-3] Attempt 1/3
+2025-09-24 09:24:32,652 - __main__ - INFO - [Step-3] Completed successfully
+2025-09-24 09:24:32,653 - __main__ - INFO - === Step 3B: Signal Slicing for ML ===
+2025-09-24 09:24:32,653 - __main__ - WARNING - Step 3B can be very slow for large files. Use --skip_step3b to skip this step if needed.
+2025-09-24 09:24:32,654 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing_original.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --fs_hint 20000000.0 --carriers_csv ...carriers.csv --mode carriers --win 16384 --hop_frac 0.5 --oversample 4.0 --min_bw 100000 --out ...slices_out
+2025-09-24 09:24:32,654 - __main__ - INFO - Step 3B timeout set to 600 seconds
+2025-09-24 09:24:32,654 - __main__ - INFO - [Step-3B] Attempt 1/1
+2025-09-24 09:27:49,290 - __main__ - WARNING - [Step-3B] Process failed with return code 1
+2025-09-24 09:27:49,291 - __main__ - ERROR - Step 3B failed or timed out: Step-3B failed after 1 attempts: Process failed with return code 1
+2025-09-24 09:27:49,291 - __main__ - WARNING - Skipping Step 3B due to timeout. Use --skip_step3b to avoid this in future runs.
+2025-09-24 09:27:49,291 - __main__ - WARNING - Or try with a smaller file or --only_step3 to stop before Step 3B.
+2025-09-24 09:27:49,292 - __main__ - INFO - === Step 5: Inference ===
+2025-09-24 09:27:49,292 - __main__ - INFO - Command: ...python.exe -u ...5_inference.py --in C:\Users\Sean_Temp\Documents\Test_files\test2.wav --model_ts Model\best_model_script_cuda.pt --labels_json Model\selected_labels.json --out_dir ...step5_out --device cuda --seg 10.0 --batch_size 64 --tag pipeline_test2 --sr 20000000.0 --auto_vad
+2025-09-24 09:27:49,293 - __main__ - INFO - Step 5 timeout set to 1200 seconds
+2025-09-24 09:27:49,293 - __main__ - INFO - [Step-5] Attempt 1/3
+2025-09-24 09:28:01,527 - __main__ - WARNING - [Step-5] Process failed with return code 1
+2025-09-24 09:28:01,527 - __main__ - INFO - [Step-5] Retrying in 30 seconds...
+2025-09-24 09:28:31,528 - __main__ - INFO - [Step-5] Attempt 2/3
+2025-09-24 09:28:33,589 - __main__ - WARNING - [Step-5] Process failed with return code 1
+2025-09-24 09:28:33,589 - __main__ - INFO - [Step-5] Retrying in 60 seconds...
+2025-09-24 09:29:33,591 - __main__ - INFO - [Step-5] Attempt 3/3
+2025-09-24 09:29:35,666 - __main__ - WARNING - [Step-5] Process failed with return code 1
+2025-09-24 09:29:35,667 - __main__ - ERROR - Pipeline failed: Step-5 failed after 3 attempts: Process failed with return code 1
+2025-09-24 09:39:18,169 - __main__ - INFO - Validating system resources...
+2025-09-24 09:39:18,169 - __main__ - WARNING - psutil not available, skipping resource validation
+2025-09-24 09:39:18,169 - __main__ - INFO - Validating inputs...
+2025-09-24 09:39:18,169 - __main__ - INFO - Detected RF64 WAV format
+2025-09-24 09:39:18,169 - __main__ - INFO - RF64 format detected - optimized for large files (>4GB)
+2025-09-24 09:39:18,169 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\test2.wav
+2025-09-24 09:39:18,169 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-24 09:39:18,169 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-24 09:39:18,169 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out_dir ...out_report --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-24 09:39:18,169 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-24 09:40:15,609 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-24 09:40:15,610 - __main__ - INFO - Extracted JSON successfully: Q+jI
+2025-09-24 09:40:15,610 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-24 09:40:15,611 - __main__ - INFO - Found run directory from output: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\run_test2_20250924_093918
+2025-09-24 09:40:15,611 - __main__ - INFO - Run directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\run_test2_20250924_093918
+2025-09-24 09:40:15,611 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-24 09:40:15,611 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-24 09:40:15,611 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out ...run_test2_20250924_093918 --conv Q+I --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --max_duration 60.0 --fs_hint 20000000.0
+2025-09-24 09:40:15,611 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-24 09:40:26,459 - __main__ - WARNING - [Step-2] Process failed with return code 1
+2025-09-24 09:40:26,459 - __main__ - INFO - [Step-2] Retrying in 30 seconds...
+2025-09-24 09:40:56,465 - __main__ - INFO - [Step-2] Attempt 2/3
+2025-09-24 09:41:07,210 - __main__ - WARNING - [Step-2] Process failed with return code 1
+2025-09-24 09:41:07,210 - __main__ - INFO - [Step-2] Retrying in 60 seconds...
+2025-09-24 09:41:12,288 - __main__ - INFO - Received signal SIGINT, cleaning up...
+2025-09-24 09:47:29,598 - __main__ - INFO - Validating system resources...
+2025-09-24 09:47:29,599 - __main__ - WARNING - psutil not available, skipping resource validation
+2025-09-24 09:47:29,599 - __main__ - INFO - Validating inputs...
+2025-09-24 09:47:29,599 - __main__ - INFO - Detected RF64 WAV format
+2025-09-24 09:47:29,599 - __main__ - INFO - RF64 format detected - optimized for large files (>4GB)
+2025-09-24 09:47:29,599 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\test2.wav
+2025-09-24 09:47:29,599 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-24 09:47:29,599 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-24 09:47:29,599 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out_dir ...out_report --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-24 09:47:29,599 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-24 09:48:27,075 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-24 09:48:27,075 - __main__ - INFO - Extracted JSON successfully: Q+jI
+2025-09-24 09:48:27,076 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-24 09:48:27,076 - __main__ - INFO - Found run directory from output: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\run_test2_20250924_094729
+2025-09-24 09:48:27,076 - __main__ - INFO - Run directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\run_test2_20250924_094729
+2025-09-24 09:48:27,076 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-24 09:48:27,076 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-24 09:48:27,076 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out ...run_test2_20250924_094729 --conv Q+I --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --max_duration 60.0 --fs_hint 20000000.0
+2025-09-24 09:48:27,077 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-24 10:03:09,679 - __main__ - INFO - [Step-2] Completed successfully
+2025-09-24 10:03:09,679 - __main__ - INFO - === Step 3: Signal Detection & Slicing ===
+2025-09-24 10:03:09,679 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --out ...run_test2_20250924_094729 --mem_budget_mb 512 --rms_win_ms 5.0 --thresh_dbfs -60.0 --min_dur_ms 5.0 --gap_ms 3.0 --pad_ms 2.0 --max_slices 1000 --fs_hint 20000000.0
+2025-09-24 10:03:09,679 - __main__ - INFO - [Step-3] Attempt 1/3
+2025-09-24 10:06:34,408 - __main__ - INFO - [Step-3] Completed successfully
+2025-09-24 10:06:34,408 - __main__ - INFO - === Step 3B: Signal Slicing for ML ===
+2025-09-24 10:06:34,408 - __main__ - WARNING - Step 3B can be very slow for large files. Use --skip_step3b to skip this step if needed.
+2025-09-24 10:06:34,409 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing_original.py C:\Users\Sean_Temp\Documents\Test_files\test2.wav --fs_hint 20000000.0 --carriers_csv ...carriers.csv --mode carriers --win 16384 --hop_frac 0.5 --oversample 4.0 --min_bw 100000 --out ...slices_out
+2025-09-24 10:06:34,409 - __main__ - INFO - Step 3B timeout set to 600 seconds
+2025-09-24 10:06:34,409 - __main__ - INFO - [Step-3B] Attempt 1/1

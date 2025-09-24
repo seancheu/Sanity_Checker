@@ -1,0 +1,16 @@
+{
+  "wav": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav",
+  "fs_hz": 20000000.0,
+  "frames": 468008960,
+  "duration_s": 23.400448,
+  "params": {
+    "mem_budget_mb": 512,
+    "rms_win_ms": 5.0,
+    "thresh_dbfs": -60.0,
+    "min_dur_ms": 5.0,
+    "gap_ms": 3.0,
+    "pad_ms": 2.0,
+    "chunk_frames": 16777216
+  },
+  "num_slices": 1
+}

@@ -1,0 +1,39 @@
+I/Q Data Sanity Check Report
+==================================================
+
+Input File: C:\Users\Sean_Temp\Documents\Test_files\test2.wav
+Analysis Date: 2025-09-24 09:48:27
+Quality Score: 85.0/100
+
+File Characteristics:
+--------------------
+File duration: 23.400 seconds
+Covered duration: 23.400 seconds
+Coverage fraction: 100.0000%
+Samples analyzed: 468,008,960
+Channels: 2
+Sample Rate (header): 2,048,000 Hz
+Sample Rate (used): 20,000,000 Hz
+Sampling strategy: stream_full(mem_budget_mb=512, chunk_frames=16777216)
+
+Data Quality:
+--------------------
+NaN values: 0
+Infinite values: 0
+I channel clipping: 0.00%
+Q channel clipping: 0.00%
+
+I/Q Balance Analysis:
+--------------------
+Best convention: Q+jI
+Best IRR: 5.92 dB
+Envelope kurtosis: 4.73
+
+Issues Found:
+--------------------
+[ERROR] Poor I/Q balance (IRR: 5.9 dB)
+
+Recommendations:
+--------------------
+[SUGGESTION] Consider using --conv Q I in downstream processing
+
