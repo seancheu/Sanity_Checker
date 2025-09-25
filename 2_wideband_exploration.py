@@ -743,7 +743,7 @@ def main():
 
     # Check memory safety before proceeding
     try:
-        check_memory_safety(mem_est_mb)
+        check_memory_safety(mem_est_mb, 8192)  # 8GB default limit
     except RuntimeError as e:
         print_progress(f"MEMORY SAFETY ERROR: {e}")
         if not args.force_full:

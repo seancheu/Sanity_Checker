@@ -24,7 +24,8 @@
       "Bash(tasklist)",
       "Bash(findstr:*)",
       "Bash(taskkill:*)",
-      "Bash(TASKKILL:*)"
+      "Bash(TASKKILL:*)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []

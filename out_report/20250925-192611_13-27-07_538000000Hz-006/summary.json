@@ -1,0 +1,38 @@
+{
+  "wav": "C:\\Users\\Sean\\Documents\\Python\\Test files\\13-27-07_538000000Hz-006.wav",
+  "fs_header_hz": 20000000.0,
+  "fs_used_hz": 20000000.0,
+  "original_fs_hz": 20000000.0,
+  "duration_s": 27.9642112,
+  "original_duration_s": 27.9642112,
+  "samples_processed": 559284224,
+  "original_samples": 559284224,
+  "nperseg": 1024,
+  "overlap": 0.5,
+  "noise_floor_db": -120.98507690429688,
+  "num_carriers": 1,
+  "cfar": {
+    "k": 2.5,
+    "guard": 1,
+    "train": 6
+  },
+  "prom_db": 5.0,
+  "optimization": {
+    "used_sampling": false,
+    "reduction_factor": 1.0,
+    "target_duration_s": 10.0,
+    "memory_estimate_mb": 17067.984375,
+    "waterfall_shape": [
+      1024,
+      3994
+    ]
+  },
+  "irr_analysis": {
+    "conv_applied": "Q+I",
+    "corrected_irr_db": 0.7392030460792803,
+    "step1_irr_db": 0.3821439237152738,
+    "step1_convention": "Q+jI",
+    "irr_improvement_db": 0.35705912236400655,
+    "step1_file": "out_report\\20250925-192611_13-27-07_538000000Hz-006\\run_13-27-07_538000000Hz-006_20250925_192611\\sanity_check_13-27-07_538000000Hz-006_stats.json"
+  }
+}

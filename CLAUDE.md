@@ -139,6 +139,87 @@ Core libraries used throughout the pipeline:
 - `matplotlib` for visualization
 - `csv`, `json` for metadata handling
 
+## Project Structure
+
+```
+Sanity_Checker/
+├── 1_sanity_check_iq.py           # Step 1: I/Q data validation & IRR analysis
+├── 2_wideband_exploration.py      # Step 2: Spectral analysis & CFAR detection
+├── 3_signal_detection_slicing.py  # Step 3: Signal slicing & baseband conversion
+├── 4_feature_extraction.py        # Step 4: Feature computation & cumulants
+├── 5_inference.py                 # Step 5: Deep learning inference (active)
+├── 6_insight_generation.py        # Step 6: ML classification (placeholder)
+├── 7_qa.py                        # Step 7: Quality assurance & conflict analysis
+├── run_iq_pipeline_v2.py          # Main pipeline orchestrator (recommended)
+├── run_iq_pipeline.py             # Legacy pipeline (deprecated)
+├── batch_processor.py             # Batch processing utilities
+├── irr_analysis.py                # IRR analysis utilities
+├── test_*.py                      # Testing and validation scripts
+├── verify_iq_convention.py        # I/Q convention verification
+├── requirements.txt               # Python dependencies
+├── CLAUDE.md                      # This file
+├── .gitignore                     # Git ignore patterns
+├── venv/                          # Python virtual environment (ignored)
+├── out_report/                    # Default output directory
+├── step*_out/                     # Step-specific output directories
+└── Original Scripts/              # Legacy/backup scripts
+```
+
+## Development Environment
+
+### Setup
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or
+venv\Scripts\activate     # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### Current Environment
+- **Python:** 3.11.0
+- **Primary Dependencies:** numpy, scipy, soundfile, h5py, matplotlib
+- **Virtual Environment:** 5.6GB with full scientific Python stack
+- **Total Scripts:** 14 main Python files (excluding venv)
+
+## Testing & Validation
+
+### Performance Testing
+```bash
+# Test optimizations with synthetic data
+python test_optimization.py
+
+# Validate IRR analysis across files
+python test_irr_variability.py
+
+# Verify I/Q convention detection
+python verify_iq_convention.py
+```
+
+### Output Directories
+- `out_report/` - Default analysis outputs (PSD, waterfall, carriers)
+- `step*_out/` - Individual step outputs and intermediate files
+- `test_*_out/` - Testing and validation outputs
+
+## Git Management
+
+The project uses a comprehensive `.gitignore` to exclude:
+- Python cache files (`__pycache__/`, `*.pyc`)
+- Virtual environment (`venv/`)
+- Large output files (`*.h5`, log files)
+- Temporary directories (`test_*`, `*_out/`)
+- IDE and OS files
+
+## Performance Notes
+
+- **Large File Handling:** Automatic sampling for files >60s duration
+- **Memory Management:** Chunked processing with configurable limits
+- **Batch Processing:** Sequential processing prevents memory exhaustion
+- **Checkpointing:** Resume capability for interrupted batch jobs
+
 ## Notes
 
 - All scripts accept `--fs_hint` to override WAV header sample rate when incorrect
@@ -146,3 +227,4 @@ Core libraries used throughout the pipeline:
 - The pipeline supports both continuous carrier analysis and burst-mode detection
 - Higher-order cumulant features are particularly useful for distinguishing modulation types
 - CFAR parameters may need tuning based on signal characteristics and noise floor
+- Step 6 (`6_insight_generation.py`) is currently a placeholder - actual ML inference handled by Step 5

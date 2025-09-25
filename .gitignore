@@ -1,13 +1,37 @@
+# Python virtual environment
 /venv
-/venv
-<<<<<<< HEAD
-/venv
-=======
+
+# Large output files
 out_report/slices_out/slices.h5
->>>>>>> 144f79ddd8b935093791f7563c4035eb6876b497
-/venv
-/venv
+
+# Build artifacts
 /wheels
-/venv
-out_report/slices_out/slices.h5
-/venv
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Temporary output directories
+test_*/
+step*/
+*_out/
+
+# Log files
+*.log
+
+# Executable files
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local

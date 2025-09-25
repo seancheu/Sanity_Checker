@@ -2004,3 +2004,43 @@
 2025-09-25 19:23:16,901 - __main__ - INFO - [Step-2] Attempt 1/3
 2025-09-25 19:23:17,969 - __main__ - WARNING - [Step-2] Process failed with return code 1
 2025-09-25 19:23:17,969 - __main__ - INFO - [Step-2] Retrying in 30 seconds...
+2025-09-25 19:23:47,969 - __main__ - INFO - [Step-2] Attempt 2/3
+2025-09-25 19:23:48,870 - __main__ - WARNING - [Step-2] Process failed with return code 1
+2025-09-25 19:23:48,870 - __main__ - INFO - [Step-2] Retrying in 60 seconds...
+2025-09-25 19:24:48,871 - __main__ - INFO - [Step-2] Attempt 3/3
+2025-09-25 19:24:51,007 - __main__ - WARNING - [Step-2] Process failed with return code 1
+2025-09-25 19:24:51,007 - __main__ - ERROR - Pipeline failed: Step-2 failed after 3 attempts: Process failed with return code 1
+2025-09-25 19:26:10,035 - __main__ - INFO - Validating system resources...
+2025-09-25 19:26:11,049 - __main__ - INFO - Validating inputs...
+2025-09-25 19:26:11,049 - __main__ - INFO - Detected RF64 WAV format
+2025-09-25 19:26:11,049 - __main__ - INFO - RF64 format detected - optimized for large files (>4GB)
+2025-09-25 19:26:11,052 - __main__ - INFO - Single file processing: C:\Users\Sean\Documents\Python\Test files\13-27-07_538000000Hz-006.wav
+2025-09-25 19:26:11,052 - __main__ - INFO - Output directory: C:\Users\Sean\Documents\Github\Sanity_Checker\out_report
+2025-09-25 19:26:11,052 - __main__ - INFO - Processing WAV file: C:\Users\Sean\Documents\Python\Test files\13-27-07_538000000Hz-006.wav
+2025-09-25 19:26:11,052 - __main__ - INFO - Output directory: C:\Users\Sean\Documents\Github\Sanity_Checker\out_report
+2025-09-25 19:26:11,052 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-25 19:26:11,052 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py ...13-27-07_538000000Hz-006.wav --out_dir ...20250925-192611_13-27-07_538000000Hz-006 --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-25 19:26:11,052 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-25 19:27:12,792 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-25 19:27:12,793 - __main__ - INFO - Loaded Step-1 results from sanity_check_13-27-07_538000000Hz-006_stats.json: 32 items
+2025-09-25 19:27:12,793 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-25 19:27:12,793 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-25 19:27:12,793 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-25 19:27:12,793 - __main__ - INFO - Hybrid mode enabled: applying memory optimizations
+2025-09-25 19:27:12,794 - __main__ - INFO - Hybrid mode: max_duration=10.0s, nperseg=1024
+2025-09-25 19:27:12,794 - __main__ - INFO - Batch mode check: validated.get('batch_mode')=False
+2025-09-25 19:27:12,794 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py ...13-27-07_538000000Hz-006.wav --out ...20250925-192611_13-27-07_538000000Hz-006 --nperseg 1024 --overlap 0.5 --prom_db 5.0 --cfar_k 2.5 --cfar_guard 1 --cfar_train 6 --conv Q+I --fs_hint 20000000.0 --max_duration 10.0 --force_full
+2025-09-25 19:27:12,794 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-25 19:28:15,011 - __main__ - INFO - [Step-2] Completed successfully
+2025-09-25 19:28:15,012 - __main__ - INFO - === Step 3B: ML Signal Slicing (HDF5) ===
+2025-09-25 19:28:15,012 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing.py ...13-27-07_538000000Hz-006.wav --out ...slices_out --mem_budget_mb 512 --rms_win_ms 5.0 --thresh_dbfs -60.0 --min_dur_ms 5.0 --gap_ms 3.0 --pad_ms 2.0 --write_audio --max_slices 1000 --fs_hint 20000000.0
+2025-09-25 19:28:15,012 - __main__ - INFO - Step 3B timeout set to 600 seconds
+2025-09-25 19:28:15,012 - __main__ - INFO - [Step-3B] Attempt 1/3
+2025-09-25 19:34:05,626 - __main__ - INFO - [Step-3B] Completed successfully
+2025-09-25 19:34:05,628 - __main__ - WARNING - Step 4 requires Step 3B outputs (slices.h5 and meta.json)
+2025-09-25 19:34:05,628 - __main__ - INFO - Skipping Step 4 due to missing Step 3B outputs
+2025-09-25 19:34:05,628 - __main__ - INFO - === Step 5: Inference ===
+2025-09-25 19:34:05,629 - __main__ - INFO - Hybrid mode: Step 5 optimizations applied (2s chunks, smaller batches)
+2025-09-25 19:34:05,629 - __main__ - INFO - Command: ...python.exe -u ...5_inference.py --in ...13-27-07_538000000Hz-006.wav --model_ts Model/best_model_script_cuda.pt --labels_json Model/selected_labels.json --out_dir ...step5_out --device cuda --seg 2.0 --batch_size 32 --vad_abs_dbfs -30.0 --psd_max_frames 4096 --psd_preview_sr 1000000 --cuda_gc --auto_batch --min_batch 8 --sr 20000000 --channel_order QI
+2025-09-25 19:34:05,629 - __main__ - INFO - Step 5 timeout set to 1200 seconds
+2025-09-25 19:34:05,630 - __main__ - INFO - [Step-5] Attempt 1/3
