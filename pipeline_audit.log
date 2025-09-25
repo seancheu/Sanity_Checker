@@ -2044,3 +2044,7 @@
 2025-09-25 19:34:05,629 - __main__ - INFO - Command: ...python.exe -u ...5_inference.py --in ...13-27-07_538000000Hz-006.wav --model_ts Model/best_model_script_cuda.pt --labels_json Model/selected_labels.json --out_dir ...step5_out --device cuda --seg 2.0 --batch_size 32 --vad_abs_dbfs -30.0 --psd_max_frames 4096 --psd_preview_sr 1000000 --cuda_gc --auto_batch --min_batch 8 --sr 20000000 --channel_order QI
 2025-09-25 19:34:05,629 - __main__ - INFO - Step 5 timeout set to 1200 seconds
 2025-09-25 19:34:05,630 - __main__ - INFO - [Step-5] Attempt 1/3
+2025-09-25 22:36:38,198 - __main__ - INFO - [Step-5] Completed successfully
+2025-09-25 22:36:38,200 - __main__ - INFO - === Single File Pipeline Completed Successfully ===
+2025-09-25 22:36:38,201 - __main__ - INFO - All outputs in: C:\Users\Sean\Documents\Github\Sanity_Checker\out_report\20250925-192611_13-27-07_538000000Hz-006
+2025-09-25 22:36:38,202 - __main__ - INFO - === All Processing Completed Successfully ===
