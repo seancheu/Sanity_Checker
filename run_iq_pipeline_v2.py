@@ -1386,9 +1386,31 @@ def process_single_file(wav_path: Path, validated: dict, args) -> dict:
         if validated.get('fs_hint'):
             step2_args['fs_hint'] = validated['fs_hint']
 
+        # Apply industrial mode optimizations for massive files (22GB+)
+        if args.industrial_mode:
+            logger.info("🏭 INDUSTRIAL MODE: Optimizing for massive files (22GB+)")
+            file_duration_s = results1.get('file_duration_s', 300.0)
+            # Ultra-conservative settings for 22GB files
+            step2_args['max_duration'] = min(args.chunk_duration, 5.0)  # Never more than 5s chunks
+            step2_args['nperseg'] = 512   # Smallest FFT size
+            step2_args['cfar_k'] = 4.0    # Very strict detection to reduce processing
+            step2_args['prom_db'] = 10.0  # Only strong peaks
+            step2_args['force_full'] = True  # Override safety checks
+            logger.info(f"🏭 Industrial mode: max_duration={step2_args['max_duration']}s, nperseg=512, ULTRA-CONSERVATIVE")
+
+        # Apply hybrid mode optimizations
+        elif args.hybrid_mode:
+            logger.info("Hybrid mode enabled: applying memory optimizations")
+            # Set optimized parameters for memory efficiency
+            step2_args['max_duration'] = min(10.0, results1.get('file_duration_s', 60.0))
+            step2_args['nperseg'] = 1024  # Smaller FFT for less memory
+            step2_args['cfar_k'] = 2.5    # Less strict detection
+            step2_args['prom_db'] = 5.0   # Less strict peaks
+            logger.info(f"Hybrid mode: max_duration={step2_args['max_duration']}s, nperseg=1024")
+
         # For batch mode, automatically set max_duration for memory safety on large files
         logger.info(f"Batch mode check: validated.get('batch_mode')={validated.get('batch_mode')}")
-        if validated.get('batch_mode'):
+        if validated.get('batch_mode') and not args.hybrid_mode:
             # Get file duration from Step 1 results if available
             file_duration_s = results1.get('file_duration_s', 0)
             logger.info(f"File duration from Step 1: {file_duration_s}s")
@@ -1399,7 +1421,7 @@ def process_single_file(wav_path: Path, validated: dict, args) -> dict:
                 logger.info(f"Batch mode: Setting max_duration={safe_duration}s for memory safety (file duration: {file_duration_s:.1f}s)")
             elif validated.get('max_duration') and args.max_duration != 60.0:
                 step2_args['max_duration'] = validated['max_duration']
-        elif validated.get('max_duration') and args.max_duration != 60.0:
+        elif validated.get('max_duration') and args.max_duration != 60.0 and not args.hybrid_mode:
             step2_args['max_duration'] = validated['max_duration']
         if validated.get('force_full'):
             step2_args['force_full'] = True
@@ -1432,14 +1454,15 @@ def process_single_file(wav_path: Path, validated: dict, args) -> dict:
 
             step3b_args = {
                 'wav': str(wav_path),
-                'carriers_csv': str(carriers_csv),
-                'mode': args.step3b_mode,
-                'win': validated.get('step3b_win', 16384),
-                'hop_frac': validated.get('step3b_hop_frac', 0.5),
-                'oversample': args.step3b_oversample,
-                'min_bw': validated.get('step3b_min_bw', 100000),
                 'out': str(step3b_out_dir),
-                'conv': mapped_conv
+                'mem_budget_mb': 512,
+                'rms_win_ms': 5.0,
+                'thresh_dbfs': -60.0,
+                'min_dur_ms': 5.0,
+                'gap_ms': 3.0,
+                'pad_ms': 2.0,
+                'write_audio': True,
+                'max_slices': 1000
             }
 
             if validated.get('fs_hint'):
@@ -1510,9 +1533,32 @@ def process_single_file(wav_path: Path, validated: dict, args) -> dict:
             'labels_json': args.step5_labels,
             'out_dir': str(step5_out_dir),
             'device': args.step5_device,
-            'seg': args.step5_seg,
-            'batch_size': validated.get('step5_batch_size', 64)
+            'seg': 2.0 if args.hybrid_mode else args.step5_seg,  # Smaller chunks in hybrid mode
+            'batch_size': 32 if args.hybrid_mode else validated.get('step5_batch_size', 64)  # Smaller batches
         }
+
+        # Apply industrial mode optimizations for Step 5 (massive files)
+        if args.industrial_mode:
+            step5_args['seg'] = 1.0  # Ultra-small 1s chunks
+            step5_args['batch_size'] = 8  # Ultra-small batches
+            step5_args['vad_abs_dbfs'] = -25.0  # High threshold, less processing
+            step5_args['psd_max_frames'] = 1024  # Minimal PSD processing
+            step5_args['psd_preview_sr'] = 500000  # Aggressive downsampling
+            step5_args['cuda_gc'] = True
+            step5_args['auto_batch'] = True
+            step5_args['min_batch'] = 2  # Extreme fallback
+            step5_args['limit'] = 60  # Limit to first 60 chunks for 22GB files (test first)
+            logger.info("🏭 Industrial mode: Step 5 ULTRA-CONSERVATIVE (1s chunks, batch=8, limited chunks)")
+
+        # Apply hybrid mode optimizations for Step 5
+        elif args.hybrid_mode:
+            step5_args['vad_abs_dbfs'] = -30.0  # Skip expensive auto-VAD
+            step5_args['psd_max_frames'] = 4096  # Reduce PSD processing
+            step5_args['psd_preview_sr'] = 1000000  # More aggressive downsampling
+            step5_args['cuda_gc'] = True  # Enable GPU memory cleanup
+            step5_args['auto_batch'] = True  # Enable dynamic batch sizing
+            step5_args['min_batch'] = 8  # Minimum batch size for OOM recovery
+            logger.info("Hybrid mode: Step 5 optimizations applied (2s chunks, smaller batches)")
 
         if validated.get('fs_hint'):
             step5_args['sr'] = int(validated['fs_hint'])
@@ -1730,7 +1776,7 @@ def main():
                    help="Working dir for Step-3 (optional)")
 
     # Step-3B options (Signal slicing for ML - creates HDF5)
-    ap.add_argument("--step3b_script", default="Original Scripts/3_signal_detection_slicing_original.py",
+    ap.add_argument("--step3b_script", default="3_signal_detection_slicing.py",
                    help="Path to Step-3B slicing script")
     ap.add_argument("--step3b_mode", default="carriers", choices=["carriers", "bursts"],
                    help="Slicing mode: carriers (whole file) or bursts (activity-based)")
@@ -1826,6 +1872,18 @@ def main():
                    help="Memory limit (GB) for batch processing safety")
     ap.add_argument("--batch_results_index", action="store_true",
                    help="Create results index file for easy viewing")
+
+    # Memory optimization options
+    ap.add_argument("--hybrid_mode", action="store_true",
+                   help="Enable hybrid processing mode (5-channel enrichment + optimizations)")
+    ap.add_argument("--skip_plots", action="store_true",
+                   help="Skip all visualization/plotting for memory savings")
+    ap.add_argument("--industrial_mode", action="store_true",
+                   help="Industrial mode for massive files (22GB+, 5min+) with extreme memory safety")
+    ap.add_argument("--chunk_duration", type=float, default=10.0,
+                   help="Processing chunk duration in seconds for large files")
+    ap.add_argument("--memory_limit_gb", type=float, default=8.0,
+                   help="Maximum memory usage per processing step (GB)")
 
     try:
         args = ap.parse_args()

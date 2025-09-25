@@ -162,7 +162,21 @@ def estimate_memory_usage(N, nperseg, overlap):
     total_mb = (stft_memory + waterfall_memory + overhead_memory) / (1024 * 1024)
     return total_mb, n_windows
 
-def check_memory_safety(estimated_mb, max_safe_mb=2048):
+def check_memory_safety(estimated_mb, max_safe_mb):
+    import psutil
+
+    safe_limit_mb = 2048  # fallback
+    try:
+        available_ram_mb = psutil.virtual_memory().available // (1024 * 1024)
+        safe_limit_mb = int(available_ram_mb * 0.5)  # use up to 50% of available RAM
+    except ImportError:
+        print("psutil not installed, using default memory cap")
+
+    if estimated_mb > safe_limit_mb:
+        print(f"MEMORY SAFETY ERROR: Estimated {estimated_mb:.1f} MB > safe {max_safe_mb:.1f} MB")
+        print("Use --max_duration or --force_full to override.")
+        sys.exit(1)
+
     """Check if estimated memory usage is safe"""
     if estimated_mb > max_safe_mb:
         raise RuntimeError(f"Estimated memory usage {estimated_mb:.1f} MB exceeds safe limit {max_safe_mb} MB. "

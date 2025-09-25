@@ -159,28 +159,20 @@ def safe_normalize_iq(I, Q):
 def enrich_channels(x2, in_ch):
     I, Q = x2.astype(np.float32, copy=False)
     I, Q = safe_normalize_iq(I, Q)
+
+    # Hybrid approach: Use only 5 essential channels for memory efficiency
     amp = np.hypot(I.astype(np.float64), Q.astype(np.float64)).astype(np.float32)
     phase = np.arctan2(Q.astype(np.float64), I.astype(np.float64)).astype(np.float32)
-    dI = np.diff(I, prepend=I[:1]).astype(np.float32); dQ = np.diff(Q, prepend=Q[:1]).astype(np.float32)
-    damp = np.diff(amp, prepend=amp[:1]).astype(np.float32)
-    ph_unw = np.unwrap(phase.astype(np.float64)).astype(np.float32)
-    dphase = np.diff(ph_unw, prepend=ph_unw[:1]).astype(np.float32)
-    def movavg(x, k=5):
-        x = x.astype(np.float64, copy=False)
-        if x.size < k: return x.astype(np.float32, copy=False)
-        c = np.cumsum(np.pad(x, (1,0), mode="edge"))
-        y = (c[k:] - c[:-k]) / float(k)
-        head = np.full(k//2, y[0], dtype=np.float64); tail = np.full(k - k//2 - 1, y[-1], dtype=np.float64)
-        return np.concatenate([head, y, tail]).astype(np.float32, copy=False)
-    I_ma = movavg(I); Q_ma = movavg(Q); amp_ma = movavg(amp)
-    # Create additional derived features to get proper 14 channels
-    d2I = np.diff(dI, prepend=dI[:1]).astype(np.float32)  # second derivative of I
-    d2Q = np.diff(dQ, prepend=dQ[:1]).astype(np.float32)  # second derivative of Q
-    base14 = [I, Q, amp, phase, dI, dQ, damp, dphase, I_ma, Q_ma, amp_ma, ph_unw, d2I, d2Q]
-    base14 = [np.nan_to_num(ch, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False) for ch in base14]
-    X = np.stack(base14, axis=0)
+    dphase = np.diff(phase, prepend=phase[:1]).astype(np.float32)  # Instantaneous frequency
+
+    # Essential 5 channels: I, Q, amp, phase, dphase
+    base5 = [I, Q, amp, phase, dphase]
+    base5 = [np.nan_to_num(ch, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False) for ch in base5]
+    X = np.stack(base5, axis=0)
+
     if in_ch <= X.shape[0]:
         return X[:in_ch]
+    # Tile to match model input requirements if needed
     reps = int(np.ceil(in_ch / X.shape[0])); return np.tile(X, (reps,1))[:in_ch]
 
 # -------------- VAD --------------
@@ -537,9 +529,10 @@ def classify_segment(x_seg, sr, labels, model, device, args, run_dir, seg_index,
                 if not Path(fcsv_path).exists() or os.stat(fcsv_path).st_size == 0:
                     w.writeheader()
                 for fr_row in frame_rows: w.writerow(fr_row)
-        if save_spectrograms:
-            try: make_spectrogram_png(seg_raw, sr, run_dir / f"seg_{seg_index:04d}_{label}.png")
-            except Exception: pass
+        # Spectrogram generation disabled for memory optimization
+        # if save_spectrograms:
+        #     try: make_spectrogram_png(seg_raw, sr, run_dir / f"seg_{seg_index:04d}_{label}.png")
+        #     except Exception: pass
     return rows, (fcsv_path if Path(fcsv_path).exists() and os.stat(fcsv_path).st_size > 0 else None)
 
 # -------------- Burst grouping across chunks --------------
@@ -797,26 +790,26 @@ def run_on_file(in_path_str, args, labels, model, device, base_root, stamp):
                     for row in r:
                         w.writerow(row)
 
-    # ---- Optional timeline quicklook -------------------------------------------------
-    if bursts:
-        uniq = list(dict.fromkeys([b["pred_label"] for b in bursts]))
-        base_colors = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
-        colors = list(itertools.islice(itertools.cycle(base_colors), len(uniq)))
-        label2c = {lab: colors[i] for i, lab in enumerate(uniq)}
-        plt.figure(figsize=(14, 2.5))
-        handles = {}
-        for b in bursts:
-            c = label2c[b["pred_label"]]
-            h = plt.plot([b["start_time_s"], b["end_time_s"]], [1, 1], linewidth=8, color=c, label=b["pred_label"])[0]
-            if b["pred_label"] not in handles:
-                handles[b["pred_label"]] = h
-        plt.yticks([])
-        plt.xlabel("Time (s)")
-        plt.title(f"Bursts timeline — {in_path.name}")
-        plt.legend(handles.values(), handles.keys(), loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=8)
-        plt.tight_layout()
-        plt.savefig(run_dir / "timeline.png", bbox_inches="tight", dpi=160)
-        plt.close()
+    # ---- Optional timeline quicklook disabled for memory optimization ---------------
+    # if bursts:
+    #     uniq = list(dict.fromkeys([b["pred_label"] for b in bursts]))
+    #     base_colors = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+    #     colors = list(itertools.islice(itertools.cycle(base_colors), len(uniq)))
+    #     label2c = {lab: colors[i] for i, lab in enumerate(uniq)}
+    #     plt.figure(figsize=(14, 2.5))
+    #     handles = {}
+    #     for b in bursts:
+    #         c = label2c[b["pred_label"]]
+    #         h = plt.plot([b["start_time_s"], b["end_time_s"]], [1, 1], linewidth=8, color=c, label=b["pred_label"])[0]
+    #         if b["pred_label"] not in handles:
+    #             handles[b["pred_label"]] = h
+    #     plt.yticks([])
+    #     plt.xlabel("Time (s)")
+    #     plt.title(f"Bursts timeline — {in_path.name}")
+    #     plt.legend(handles.values(), handles.keys(), loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False, fontsize=8)
+    #     plt.tight_layout()
+    #     plt.savefig(run_dir / "timeline.png", bbox_inches="tight", dpi=160)
+    #     plt.close()
 
     # ---- Write per-file run info -----------------------------------------------------
     info = {
@@ -936,7 +929,14 @@ def main():
     if not labels:
         raise ValueError("labels_json must be a list[str] or dict with kept_class_names/labels")
 
+
     # ---- Device & model once ---------------------------------------------------------
+    # RTX 50-series workaround: recommend PyTorch 2.10.0.dev20250924+cu128 (nightly)
+    required_version = "2.10.0.dev20250924+cu128"
+    if not torch.__version__.startswith("2.10.0.dev20250924") or "cu128" not in torch.__version__:
+        print(f"[WARN] For RTX 50-series compatibility, install PyTorch nightly: {required_version}")
+        print("[INFO] See: https://pytorch.org/get-started/locally/ for instructions.")
+
     device = torch.device("cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
     if args.device == "cuda" and device.type != "cuda":
         raise RuntimeError("CUDA requested but not available. Use --device cpu.")

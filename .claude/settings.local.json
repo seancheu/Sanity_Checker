@@ -20,7 +20,11 @@
       "Bash(cat:*)",
       "Bash(sed:*)",
       "Bash(find:*)",
-      "Read(//c/Users/Sean_Temp/Documents/Test_files/**)"
+      "Read(//c/Users/Sean_Temp/Documents/Test_files/**)",
+      "Bash(tasklist)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(TASKKILL:*)"
     ],
     "deny": [],
     "ask": []

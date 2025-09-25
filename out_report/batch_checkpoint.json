@@ -1,19 +1,20 @@
 {
   "completed_files": [
-    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-30-37_570000000Hz-001.wav",
-    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-29-08_554000000Hz-002.wav",
     "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav",
     "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-27-07_538000000Hz-005.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-29-08_554000000Hz-002.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-30-37_570000000Hz-001.wav",
     "C:\\Users\\Sean_Temp\\Documents\\Test_files\\16-32-22_538000000Hz.wav"
   ],
   "failed_files": [
+    "C:\\Users\\Sean\\Documents\\Python\\Test files\\13-27-07_538000000Hz-006.wav",
     "C:\\Users\\Sean_Temp\\Documents\\Test_files\\14-35-31_393000000Hz.wav",
-    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test.wav",
     "C:\\Users\\Sean_Temp\\Documents\\Test_files\\14-34-50_393000000Hz.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test.wav",
     "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test3.wav"
   ],
   "current_file": null,
   "start_time": 1758695462.3842158,
-  "last_update": "2025-09-24 18:02:41",
-  "total_elapsed_hours": 3.5274277604950797
+  "last_update": "2025-09-25 11:45:41",
+  "total_elapsed_hours": 21.244232791132397
 }
