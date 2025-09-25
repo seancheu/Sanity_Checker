@@ -1,0 +1,38 @@
+{
+  "wav": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\14-35-31_393000000Hz.wav",
+  "fs_header_hz": 8000000.0,
+  "fs_used_hz": 20000000.0,
+  "original_fs_hz": 20000000.0,
+  "duration_s": 13.4152192,
+  "original_duration_s": 13.4152192,
+  "samples_processed": 268304384,
+  "original_samples": 268304384,
+  "nperseg": 4096,
+  "overlap": 0.5,
+  "noise_floor_db": -120.86497497558594,
+  "num_carriers": 42,
+  "cfar": {
+    "k": 3.0,
+    "guard": 1,
+    "train": 6
+  },
+  "prom_db": 8.0,
+  "optimization": {
+    "used_sampling": false,
+    "reduction_factor": 1.0,
+    "target_duration_s": 60.0,
+    "memory_estimate_mb": 6140.953125,
+    "waterfall_shape": [
+      4096,
+      131007
+    ]
+  },
+  "irr_analysis": {
+    "conv_applied": "Q+I",
+    "corrected_irr_db": -2.365865155957678,
+    "step1_irr_db": 2.377209580568738,
+    "step1_convention": "Q+jI",
+    "irr_improvement_db": -4.743074736526417,
+    "step1_file": "out_report\\run_14-35-31_393000000Hz_20250924_104231\\sanity_check_14-35-31_393000000Hz_stats.json"
+  }
+}

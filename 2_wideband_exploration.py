@@ -156,8 +156,113 @@ def estimate_memory_usage(N, nperseg, overlap):
     # Memory for waterfall dB: F x T float32 (4 bytes each)
     waterfall_memory = nperseg * n_windows * 4
 
-    total_mb = (stft_memory + waterfall_memory) / (1024 * 1024)
+    # Additional memory overhead for processing
+    overhead_memory = stft_memory * 0.5  # 50% overhead for intermediate calculations
+
+    total_mb = (stft_memory + waterfall_memory + overhead_memory) / (1024 * 1024)
     return total_mb, n_windows
+
+def check_memory_safety(estimated_mb, max_safe_mb=2048):
+    """Check if estimated memory usage is safe"""
+    if estimated_mb > max_safe_mb:
+        raise RuntimeError(f"Estimated memory usage {estimated_mb:.1f} MB exceeds safe limit {max_safe_mb} MB. "
+                         f"Consider using --max_duration to reduce file size or --force_full to override (dangerous).")
+    elif estimated_mb > max_safe_mb * 0.5:
+        print_progress(f"WARNING: High memory usage estimated: {estimated_mb:.1f} MB")
+
+def test_irr_sampling_factor(I, Q, factor, best_convention, max_test_samples=1_000_000):
+    """Test IRR quality for a specific sampling factor."""
+    # Use a subset for quick testing
+    test_samples = min(len(I), max_test_samples)
+    I_test = I[:test_samples:factor]
+    Q_test = Q[:test_samples:factor]
+
+    if len(I_test) < 1000:  # Need minimum samples for reliable IRR
+        return float('-inf')
+
+    try:
+        if best_convention == "I+jQ":
+            xc = (I_test - np.mean(I_test)) + 1j * (Q_test - np.mean(Q_test))
+        elif best_convention == "I-jQ":
+            xc = (I_test - np.mean(I_test)) - 1j * (Q_test - np.mean(Q_test))
+        elif best_convention == "Q+jI":
+            xc = (Q_test - np.mean(Q_test)) + 1j * (I_test - np.mean(I_test))
+        else:  # Q-jI
+            xc = (Q_test - np.mean(Q_test)) - 1j * (I_test - np.mean(I_test))
+
+        return calculate_irr_db(xc)
+    except:
+        return float('-inf')
+
+def adaptive_sampling_strategy(N, fs, I, Q, best_convention, target_duration=60.0, min_samples=10e6):
+    """
+    Adaptive sampling strategy that preserves IRR quality.
+    Tests multiple sampling factors and chooses the best IRR result.
+    Returns (use_sampling, sample_indices, effective_fs, reduction_factor, chosen_factor)
+    """
+    duration = N / fs
+
+    # If file is small enough, process entirely
+    if duration <= target_duration or N <= min_samples:
+        return False, None, fs, 1.0, 1
+
+    # Calculate target reduction factor
+    target_reduction = duration / target_duration
+
+    # Generate candidate sampling factors with preference for IRR-friendly ones
+    candidates = []
+
+    # Start with factors around the target, prioritizing odd numbers and powers of 2 >= 8
+    base_factor = int(np.ceil(target_reduction))
+
+    # Test range around target factor
+    test_range = max(2, int(base_factor * 0.5)), min(20, int(base_factor * 2))
+
+    for factor in range(test_range[0], test_range[1] + 1):
+        # Prioritize IRR-friendly factors
+        priority = 0
+        if factor % 2 == 1:  # Odd numbers (good for IRR)
+            priority += 10
+        elif factor >= 8 and (factor & (factor - 1)) == 0:  # Powers of 2 >= 8 (good)
+            priority += 5
+        elif factor in [3, 5, 7, 9, 15]:  # Known good factors
+            priority += 8
+        # Even factors 2, 4, 6, 12, 14, 16 get lower priority (bad for IRR)
+
+        candidates.append((factor, priority))
+
+    # Sort by priority (higher is better), then by closeness to target
+    candidates.sort(key=lambda x: (-x[1], abs(x[0] - base_factor)))
+
+    print_progress(f"Large file detected: {duration:.1f}s ({N/1e6:.1f}M samples)")
+    print_progress(f"Testing sampling factors for optimal IRR...")
+
+    best_factor = base_factor
+    best_irr = float('-inf')
+    irr_results = {}
+
+    # Test top candidates
+    for factor, priority in candidates[:8]:  # Test up to 8 factors
+        irr_db = test_irr_sampling_factor(I, Q, factor, best_convention)
+        irr_results[factor] = irr_db
+
+        if irr_db > best_irr:
+            best_irr = irr_db
+            best_factor = factor
+
+        # Show results for user feedback
+        status = "GOOD" if irr_db > 10 else "OK" if irr_db > 0 else "POOR"
+        effective_fs_mhz = fs / factor / 1e6
+        print_progress(f"  1:{factor:2d} sampling ({effective_fs_mhz:5.1f} MHz): {irr_db:+6.1f} dB [{status}]")
+
+    # Generate sampling indices
+    sample_indices = np.arange(0, N, best_factor)
+    effective_fs = fs / best_factor
+    reduction_factor = best_factor
+
+    print_progress(f"Selected: 1:{best_factor} sampling (IRR: {best_irr:+.1f} dB) -> {len(sample_indices)/1e6:.1f}M samples")
+
+    return True, sample_indices, effective_fs, reduction_factor, best_factor
 
 def smart_sampling_strategy(N, fs, target_duration=60.0, min_samples=10e6):
     """
@@ -261,15 +366,89 @@ def welch_psd(xc, fs, nperseg, noverlap):
     f = np.fft.fftshift(f); Pxx = np.fft.fftshift(Pxx)
     return f, Pxx
 
-def stft_waterfall(xc, fs, nperseg, noverlap):
-    f, t, Z = sig.stft(
-        xc, fs=fs, window="hann", nperseg=nperseg, noverlap=noverlap,
-        return_onesided=False, boundary=None, detrend=False
-    )
-    f = np.fft.fftshift(f)
-    Z = np.fft.fftshift(Z, axes=0)
-    S_db = 20*np.log10(np.maximum(np.abs(Z), 1e-12))
-    return f, t, S_db
+def stft_waterfall(xc, fs, nperseg, noverlap, max_cols=4000, window="hann"):
+    """
+    Memory-safe STFT:
+      - Computes STFT frames in a streaming loop (no giant 2D arrays).
+      - Skips frames so total time columns <= max_cols.
+      - Uses complex64/float32 to keep memory light.
+      - Memory monitoring and chunked allocation to prevent crashes.
+    Returns:
+      f [F], t_vis [T], S_db [F,T]  (already 'fftshift'-ed, ready to plot)
+    """
+
+    # Ensure light dtypes
+    x = np.asarray(xc, dtype=np.complex64, order="C")
+    N = x.size
+
+    win = sig.get_window(window, nperseg, fftbins=True).astype(np.float32)
+    hop = nperseg - int(nperseg * noverlap)
+    if hop <= 0:
+        hop = max(1, nperseg // 4)
+
+    # Total frames if we did *all* hops
+    n_frames_full = 1 + max(0, (N - nperseg) // hop)
+    # Skip factor to cap time columns
+    skip = max(1, int(math.ceil(n_frames_full / float(max_cols))))
+
+    # Conservative estimate for final size
+    T_est = int(math.ceil(n_frames_full / skip))
+    F = nperseg
+
+    # Memory safety check for waterfall size
+    estimated_mb = (F * T_est * 4) / (1024 * 1024)  # float32 = 4 bytes
+    if estimated_mb > 1024:  # 1GB limit for waterfall
+        # Reduce max_cols to stay within memory limits
+        max_cols = max(500, int(max_cols * 1024 / estimated_mb))
+        skip = max(1, int(math.ceil(n_frames_full / float(max_cols))))
+        T_est = int(math.ceil(n_frames_full / skip))
+        print_progress(f"Reducing waterfall columns to {T_est} to prevent memory crash")
+
+    # Pre-allocate output array instead of growing list
+    S_db = np.zeros((F, T_est), dtype=np.float32)
+    t_cols = np.zeros(T_est, dtype=np.float32)
+
+    # Iterate frames with hop*skip
+    idx = 0
+    frame_i = 0
+    col_count = 0
+
+    while idx + nperseg <= N and col_count < T_est:
+        if (frame_i % skip) == 0:
+            fr = x[idx:idx + nperseg]  # complex64
+            frw = (fr * win).astype(np.complex64, copy=False)
+
+            # FFT as complex64; pocketfft preserves precision of input
+            W = np.fft.fft(frw, n=nperseg)
+            # magnitude in dB (float32)
+            mag = np.abs(W).astype(np.float32, copy=False)
+            # shift frequency to [-fs/2, fs/2)
+            mag = np.fft.fftshift(mag)
+            # dB scale
+            col_db = 20.0 * np.log10(np.maximum(mag, 1e-12)).astype(np.float32, copy=False)
+
+            # Store directly in pre-allocated array
+            S_db[:, col_count] = col_db
+            t_cols[col_count] = idx / float(fs)
+            col_count += 1
+
+        frame_i += 1
+        idx += hop
+
+    if col_count == 0:
+        # Edge case: too short
+        f = np.fft.fftshift(np.fft.fftfreq(nperseg, d=1.0 / fs)).astype(np.float32)
+        return f, np.array([], dtype=np.float32), np.zeros((nperseg, 0), dtype=np.float32)
+
+    # Trim to actual size used
+    S_db = S_db[:, :col_count]
+    t_vis = t_cols[:col_count]
+
+    # Frequency axis (shifted)
+    f = np.fft.fftshift(np.fft.fftfreq(nperseg, d=1.0 / fs)).astype(np.float32)
+
+    return f, t_vis, S_db
+
 
 def noise_floor_db(psd_db):
     # robust floor: median over frequency
@@ -449,6 +628,7 @@ def main():
     # New optimization parameters
     ap.add_argument("--max_duration", type=float, default=60.0, help="Max processing duration (s) for large files")
     ap.add_argument("--force_full", action="store_true", help="Force full processing (disable sampling)")
+    ap.add_argument("--adaptive_sampling", action="store_true", help="Use adaptive sampling strategy to optimize IRR")
     ap.add_argument("--step1_dir", default="out_report", help="Step 1 output directory for IRR comparison")
     args = ap.parse_args()
 
@@ -469,29 +649,97 @@ def main():
     print_progress(f"File: {args.wav}")
     print_progress(f"Total: {N_total/1e6:.1f}M samples, {total_duration:.1f}s @ {fs/1e6:.1f} MHz")
 
-    # Determine sampling strategy
-    use_sampling, sample_indices, effective_fs, reduction_factor = smart_sampling_strategy(
-        N_total, fs, target_duration=args.max_duration
-    )
+    # Determine if we need sampling
+    duration = N_total / fs
+    need_sampling = duration > args.max_duration and not args.force_full and N_total > 10e6
+
+    # For adaptive sampling, we need a small data sample to determine the best I/Q convention first
+    use_sampling = False
+    sample_indices = None
+    effective_fs = fs
+    reduction_factor = 1.0
+    chosen_sampling_factor = 1
+
+    if need_sampling:
+        if args.adaptive_sampling:
+            # Step 1: Load a small sample to determine optimal I/Q convention
+            print_progress(f"Large file detected: {duration:.1f}s ({N_total/1e6:.1f}M samples)")
+            print_progress("Loading sample for I/Q convention analysis...")
+
+            # Load first 5M samples for convention analysis
+            sample_size = min(5_000_000, N_total)
+            x_sample, _ = sf.read(args.wav, frames=sample_size, always_2d=True)
+            x_sample = x_sample.astype(np.float32, copy=False)
+
+            if x_sample.shape[1] < 2:
+                raise SystemExit(f"Expected stereo I/Q. Got {x_sample.shape[1]} channel(s).")
+
+            I_sample = x_sample[:, 0]
+            Q_sample = x_sample[:, 1]
+
+            # Find best convention quickly
+            conventions = ["I+jQ", "I-jQ", "Q+jI", "Q-jI"]
+            best_conv = "I+jQ"  # default
+            best_irr = float('-inf')
+
+            for conv in conventions:
+                try:
+                    if conv == "I+jQ":
+                        xc_test = (I_sample - np.mean(I_sample)) + 1j * (Q_sample - np.mean(Q_sample))
+                    elif conv == "I-jQ":
+                        xc_test = (I_sample - np.mean(I_sample)) - 1j * (Q_sample - np.mean(Q_sample))
+                    elif conv == "Q+jI":
+                        xc_test = (Q_sample - np.mean(Q_sample)) + 1j * (I_sample - np.mean(I_sample))
+                    else:  # Q-jI
+                        xc_test = (Q_sample - np.mean(Q_sample)) - 1j * (I_sample - np.mean(I_sample))
+
+                    irr_test = calculate_irr_db(xc_test)
+                    if irr_test > best_irr:
+                        best_irr = irr_test
+                        best_conv = conv
+                except:
+                    continue
+
+            print_progress(f"Sample analysis: Best convention {best_conv} (IRR: {best_irr:+.1f} dB)")
+
+            # Step 2: Use adaptive sampling with the best convention
+            use_sampling, sample_indices, effective_fs, reduction_factor, chosen_sampling_factor = adaptive_sampling_strategy(
+                N_total, fs, I_sample, Q_sample, best_conv, target_duration=args.max_duration
+            )
+        else:
+            # Use legacy smart sampling strategy with IRR-friendly improvements
+            use_sampling, sample_indices, effective_fs, reduction_factor = smart_sampling_strategy(
+                N_total, fs, target_duration=args.max_duration
+            )
+            chosen_sampling_factor = int(reduction_factor)
 
     if args.force_full:
         use_sampling = False
         effective_fs = fs
         reduction_factor = 1.0
+        chosen_sampling_factor = 1
         print_progress("--force_full: Processing entire file")
 
-    # Estimate memory usage
+    # Estimate memory usage and check safety
     nperseg = int(args.nperseg)
     noverlap = int(nperseg * args.overlap)
     N_eff = len(sample_indices) if use_sampling else N_total
     mem_est_mb, n_windows = estimate_memory_usage(N_eff, nperseg, args.overlap)
     print_progress(f"Estimated memory: {mem_est_mb:.1f} MB for {n_windows} time windows")
 
-    # Load data with sampling if needed
+    # Check memory safety before proceeding
+    try:
+        check_memory_safety(mem_est_mb)
+    except RuntimeError as e:
+        print_progress(f"MEMORY SAFETY ERROR: {e}")
+        if not args.force_full:
+            raise SystemExit("Aborting to prevent system crash. Use --max_duration for smaller processing window.")
+
+    # Load data with optimized sampling if needed
     load_start = time.time()
     if use_sampling:
         # Use chunked reading for memory efficiency with large files
-        x = read_with_chunked_sampling(args.wav, reduction_factor)
+        x = read_with_chunked_sampling(args.wav, chosen_sampling_factor)
     else:
         x, _ = sf.read(args.wav, always_2d=True)
         x = x.astype(np.float32, copy=False)

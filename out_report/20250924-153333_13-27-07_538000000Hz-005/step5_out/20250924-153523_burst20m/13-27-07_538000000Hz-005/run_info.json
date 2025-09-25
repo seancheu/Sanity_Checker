@@ -1,0 +1,13 @@
+{
+  "source": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-27-07_538000000Hz-005.wav",
+  "sample_rate_hz": 20000000.0,
+  "duration_s": 13.9821061,
+  "chunks": 2,
+  "T_crop": 16384,
+  "stride": 8192,
+  "labels_count": 12,
+  "auto_vad": false,
+  "device": "cuda",
+  "amp": false,
+  "out_dir": "C:\\Users\\Sean_Temp\\Documents\\Sanity_Checker\\out_report\\20250924-153333_13-27-07_538000000Hz-005\\step5_out\\20250924-153523_burst20m\\13-27-07_538000000Hz-005"
+}

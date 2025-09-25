@@ -8,9 +8,50 @@ This is a Python-based signal processing pipeline for analyzing I/Q (In-phase/Qu
 
 ## Commands
 
-### Running the Complete Pipeline
+### Batch Processing (NEW FEATURE)
 
-Execute the 7-step analysis pipeline in order:
+For processing multiple large files (like 50+ files of 22GB each) sequentially with safety and checkpointing:
+
+```bash
+# Process multiple files with batch mode
+python run_iq_pipeline_v2.py file1.wav file2.wav file3.wav --fs_hint 20000000 --batch_mode
+
+# Process entire directory with batch mode
+python run_iq_pipeline_v2.py /path/to/wav/directory --fs_hint 20000000 --batch_mode
+
+# Resume interrupted batch processing
+python run_iq_pipeline_v2.py /path/to/wav/files --fs_hint 20000000 --batch_mode --resume
+
+# Batch processing with memory safety (recommended for large files)
+python run_iq_pipeline_v2.py /path/to/wav/files --fs_hint 20000000 --batch_mode --batch_memory_limit_gb 6.0 --batch_results_index
+
+# Run only Step 1 (sanity check) on multiple files
+python run_iq_pipeline_v2.py *.wav --fs_hint 20000000 --only_step1 --batch_mode
+```
+
+**Batch Processing Features:**
+- **Sequential Processing**: Processes files one at a time to prevent memory exhaustion
+- **Automatic Checkpointing**: Saves progress after each file, enables --resume functionality
+- **Memory Safety**: Monitors system memory and waits for availability before processing
+- **Progress Tracking**: Shows current file progress and estimated time remaining
+- **Results Index**: Creates an HTML index file for easy viewing of batch results
+- **Error Isolation**: One failed file doesn't stop the entire batch
+
+### Single File Pipeline
+
+Execute the complete pipeline on a single file:
+
+```bash
+# Complete pipeline (all steps)
+python run_iq_pipeline_v2.py your.wav --fs_hint 20000000
+
+# Step 1: Sanity check I/Q data
+python run_iq_pipeline_v2.py your.wav --fs_hint 20000000 --only_step1
+```
+
+### Individual Step Commands
+
+Execute individual steps (for advanced use):
 
 ```bash
 # Step 1: Sanity check I/Q data

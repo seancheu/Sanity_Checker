@@ -36,6 +36,7 @@ Usage:
 
 import argparse
 import atexit
+import gc
 import hashlib
 import json
 import logging
@@ -51,8 +52,10 @@ import tempfile
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any
+import glob
 
 # Configure secure logging
 logging.basicConfig(
@@ -66,7 +69,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Global cleanup registry
-cleanup_dirs: List[Path] = []
+cleanup_dirs = set()
 active_processes: List[subprocess.Popen] = []
 
 # ---------- Security Classes ----------
@@ -316,13 +319,13 @@ def validate_python_executable(py_str: str = None) -> str:
     except (OSError, ValueError) as e:
         raise ValueError(f"Invalid Python executable: {e}")
 
-def check_file_size_limits(file_path: Path, max_size_gb: float = 50.0) -> None:
+def check_file_size_limits(file_path: Path, max_size_gb: float = 25.0) -> None:
     """
-    Check file size to prevent DoS attacks.
+    Check file size to prevent DoS attacks and system crashes.
 
     Args:
         file_path: Path to file
-        max_size_gb: Maximum allowed size in GB
+        max_size_gb: Maximum allowed size in GB (reduced from 50GB to 25GB)
     """
     try:
         size_bytes = file_path.stat().st_size
@@ -330,11 +333,12 @@ def check_file_size_limits(file_path: Path, max_size_gb: float = 50.0) -> None:
 
         if size_gb > max_size_gb:
             raise ResourceExhaustionError(
-                f"File too large: {size_gb:.2f}GB (max: {max_size_gb}GB)"
+                f"File too large: {size_gb:.2f}GB (max: {max_size_gb}GB). "
+                f"This size can cause system crashes. Use --max_duration to process smaller segments."
             )
 
-        if size_gb > 10:
-            logger.warning(f"Large file detected: {size_gb:.1f}GB")
+        if size_gb > 5:
+            logger.warning(f"Large file detected: {size_gb:.1f}GB - recommend using --max_duration for safety")
 
     except OSError as e:
         raise ValueError(f"Cannot access file: {e}")
@@ -594,7 +598,7 @@ def create_secure_run_directory(base_dir: Path, wav_stem: str) -> Path:
             run_dir.chmod(stat.S_IRWXU)  # 700 permissions
 
         # Add to cleanup registry
-        cleanup_dirs.append(run_dir)
+        cleanup_dirs.add(run_dir)
 
         logger.info(f"Created secure run directory: {run_dir}")
         return run_dir
@@ -765,7 +769,7 @@ def cleanup_handler() -> None:
     # Note: Only clean up on abnormal termination, not successful completion
     signal_cleanup = hasattr(cleanup_handler, '_signal_triggered')
     if signal_cleanup:
-        for dir_path in cleanup_dirs[:]:
+        for dir_path in cleanup_dirs.copy():
             try:
                 if dir_path.exists():
                     shutil.rmtree(dir_path, ignore_errors=True)
@@ -801,25 +805,39 @@ def validate_all_inputs(args) -> Dict[str, Any]:
     # Determine security level
     allow_parent_dirs = not getattr(args, 'strict_paths', False)
 
-    # Validate WAV file
-    validated['wav_path'] = validate_file_path(args.wav, must_exist=True, allow_parent_dirs=allow_parent_dirs)
+    # Handle batch mode vs single file mode
+    if len(args.wav) > 1 or args.batch_mode:
+        # Batch mode - discover WAV files
+        wav_files = discover_wav_files(args.wav)
+        if not wav_files:
+            raise ValueError("No WAV files found in specified paths")
+        validated['wav_files'] = wav_files
+        validated['batch_mode'] = True
+        logger.info(f"Batch mode: Found {len(wav_files)} WAV files")
 
-    # Check file format and detect WAV type
-    wav_path = validated['wav_path']
-    if wav_path.suffix.lower() not in ['.wav', '.wave']:
-        logger.warning(f"File extension '{wav_path.suffix}' is not .wav")
-
-    # Detect WAV format (RIFF vs RF64)
-    is_wav_format, wav_format = detect_wav_format(wav_path)
-    if is_wav_format:
-        logger.info(f"Detected {wav_format} WAV format")
-        if wav_format == 'RF64':
-            logger.info("RF64 format detected - optimized for large files (>4GB)")
+        # For batch mode, skip individual file validation (will be done per file)
+        validated['wav_path'] = None
     else:
-        logger.warning(f"Unknown file format detected: {wav_format}")
+        # Single file mode
+        validated['wav_path'] = validate_file_path(args.wav[0], must_exist=True, allow_parent_dirs=allow_parent_dirs)
+        validated['batch_mode'] = False
 
-    # Check file size
-    check_file_size_limits(wav_path)
+        # Check file format and detect WAV type
+        wav_path = validated['wav_path']
+        if wav_path.suffix.lower() not in ['.wav', '.wave']:
+            logger.warning(f"File extension '{wav_path.suffix}' is not .wav")
+
+        # Detect WAV format (RIFF vs RF64)
+        is_wav_format, wav_format = detect_wav_format(wav_path)
+        if is_wav_format:
+            logger.info(f"Detected {wav_format} WAV format")
+            if wav_format == 'RF64':
+                logger.info("RF64 format detected - optimized for large files (>4GB)")
+        else:
+            logger.warning(f"Unknown file format detected: {wav_format}")
+
+        # Check file size
+        check_file_size_limits(wav_path)
 
     # Validate output directory
     validated['out_dir'] = validate_output_dir(args.out_dir, allow_parent_dirs=allow_parent_dirs)
@@ -838,11 +856,11 @@ def validate_all_inputs(args) -> Dict[str, Any]:
 
     # Determine which steps to run based on control flags
     step_control = {
-        'run_step1': True,
-        'run_step2': not args.only_step1,
-        'run_step3': not args.only_step1 and not args.only_step2,
-        'run_step3b': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.skip_step3b,
-        'run_step4': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.only_step3b and not args.skip_step4,
+        'run_step1': not args.only_step5,
+        'run_step2': not args.only_step1 and not args.only_step5,
+        'run_step3': not args.only_step1 and not args.only_step2 and not args.only_step5,
+        'run_step3b': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.only_step5 and not args.skip_step3b,
+        'run_step4': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.only_step3b and not args.only_step5 and not args.skip_step4,
         'run_step5': not args.only_step1 and not args.only_step2 and not args.only_step3 and not args.only_step3b and not args.only_step4 and not args.skip_step5
     }
     validated.update(step_control)
@@ -905,7 +923,7 @@ def validate_all_inputs(args) -> Dict[str, Any]:
             validated[param] = validate_numeric_param(value, param, min_val, max_val, 'float')
 
     # Validate boolean flags
-    bool_params = ['force_full', 'step3_write_audio', 'step4_emit_h5', 'step5_auto_vad']
+    bool_params = ['force_full', 'adaptive_sampling', 'step3_write_audio', 'step4_emit_h5', 'step5_auto_vad']
     for param in bool_params:
         validated[param] = getattr(args, param)
 
@@ -923,6 +941,296 @@ def validate_all_inputs(args) -> Dict[str, Any]:
             validated[param] = None
 
     return validated
+
+# ---------- Batch Processing Support ----------
+
+class BatchProgress:
+    """Handles batch processing progress tracking and checkpointing"""
+
+    def __init__(self, output_dir: Path):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.checkpoint_file = self.output_dir / "batch_checkpoint.json"
+        self.summary_file = self.output_dir / "batch_summary.json"
+
+        self.completed_files = set()
+        self.failed_files = set()
+        self.current_file = None
+        self.start_time = time.time()
+
+        self._load_checkpoint()
+
+    def _load_checkpoint(self):
+        """Load existing checkpoint data"""
+        try:
+            if self.checkpoint_file.exists():
+                with open(self.checkpoint_file, 'r') as f:
+                    data = json.load(f)
+
+                self.completed_files = set(data.get('completed_files', []))
+                self.failed_files = set(data.get('failed_files', []))
+                self.start_time = data.get('start_time', time.time())
+
+                logger.info(f"Resuming batch: {len(self.completed_files)} completed, {len(self.failed_files)} failed")
+        except Exception as e:
+            logger.warning(f"Could not load checkpoint: {e}")
+
+    def _save_checkpoint(self):
+        """Save current progress to checkpoint file"""
+        try:
+            data = {
+                'completed_files': list(self.completed_files),
+                'failed_files': list(self.failed_files),
+                'current_file': str(self.current_file) if self.current_file else None,
+                'start_time': self.start_time,
+                'last_update': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'total_elapsed_hours': (time.time() - self.start_time) / 3600
+            }
+
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(data, f, indent=2)
+
+        except Exception as e:
+            logger.warning(f"Could not save checkpoint: {e}")
+
+    def start_file(self, file_path: Path) -> bool:
+        """Check if file should be processed and mark as current"""
+        file_str = str(file_path.resolve())
+
+        if file_str in self.completed_files:
+            logger.info(f"File already completed: {file_path.name}")
+            return False
+
+        if file_str in self.failed_files:
+            logger.info(f"Retrying previously failed file: {file_path.name}")
+
+        self.current_file = file_path
+        logger.info(f"Starting file: {file_path.name}")
+        self._save_checkpoint()
+        return True
+
+    def complete_file(self, file_path: Path, success: bool):
+        """Mark file as completed or failed"""
+        file_str = str(file_path.resolve())
+
+        if success:
+            self.completed_files.add(file_str)
+            if file_str in self.failed_files:
+                self.failed_files.remove(file_str)
+            logger.info(f"File completed successfully: {file_path.name}")
+        else:
+            self.failed_files.add(file_str)
+            logger.error(f"File failed: {file_path.name}")
+
+        self.current_file = None
+        self._save_checkpoint()
+
+        # Update summary after each file
+        self._update_summary()
+
+    def _update_summary(self):
+        """Update batch summary file"""
+        try:
+            elapsed_hours = (time.time() - self.start_time) / 3600
+            total_files = len(self.completed_files) + len(self.failed_files)
+
+            summary = {
+                'batch_start_time': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.start_time)),
+                'last_update': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'elapsed_hours': elapsed_hours,
+                'completed_files': len(self.completed_files),
+                'failed_files': len(self.failed_files),
+                'total_processed': total_files,
+                'success_rate': len(self.completed_files) / total_files if total_files > 0 else 0,
+                'avg_time_per_file_hours': elapsed_hours / total_files if total_files > 0 else 0,
+                'completed_list': list(self.completed_files),
+                'failed_list': list(self.failed_files)
+            }
+
+            with open(self.summary_file, 'w') as f:
+                json.dump(summary, f, indent=2)
+
+        except Exception as e:
+            logger.warning(f"Could not update summary: {e}")
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current batch status"""
+        elapsed_hours = (time.time() - self.start_time) / 3600
+        total_processed = len(self.completed_files) + len(self.failed_files)
+
+        return {
+            'completed': len(self.completed_files),
+            'failed': len(self.failed_files),
+            'total_processed': total_processed,
+            'elapsed_hours': elapsed_hours,
+            'success_rate': len(self.completed_files) / total_processed if total_processed > 0 else 0
+        }
+
+def discover_wav_files(input_paths: List[str]) -> List[Path]:
+    """Discover all WAV files from input paths (files or directories)"""
+    wav_files = []
+
+    for input_path in input_paths:
+        path_obj = Path(input_path)
+
+        if path_obj.is_file():
+            # Single file
+            if path_obj.suffix.lower() in ['.wav', '.wave']:
+                wav_files.append(path_obj)
+            else:
+                logger.warning(f"Skipping non-WAV file: {path_obj}")
+
+        elif path_obj.is_dir():
+            # Directory - find all WAV files
+            found_files = []
+            extensions = ['*.wav', '*.WAV', '*.wave', '*.WAVE']
+
+            for ext in extensions:
+                found_files.extend(path_obj.glob(ext))
+
+            logger.info(f"Found {len(found_files)} WAV files in directory: {path_obj}")
+            wav_files.extend(found_files)
+
+        else:
+            logger.error(f"Invalid path (not file or directory): {path_obj}")
+
+    # Remove duplicates and sort
+    wav_files = list(set(wav_files))
+    wav_files.sort(key=lambda x: x.name.lower())
+
+    logger.info(f"Total WAV files discovered: {len(wav_files)}")
+
+    # Show first 10 files with sizes
+    for i, wav_file in enumerate(wav_files[:10], 1):
+        try:
+            size_gb = wav_file.stat().st_size / (1024**3)
+            logger.info(f"  {i:2d}. {wav_file.name} ({size_gb:.1f}GB)")
+        except:
+            logger.info(f"  {i:2d}. {wav_file.name} (size unknown)")
+
+    if len(wav_files) > 10:
+        logger.info(f"  ... and {len(wav_files) - 10} more files")
+
+    return wav_files
+
+def cleanup_memory():
+    """Force memory cleanup"""
+    gc.collect()
+    try:
+        # Additional cleanup for numpy arrays
+        import numpy as np
+        if hasattr(np, '_cleanup'):
+            np._cleanup()
+    except:
+        pass
+
+def check_memory_usage() -> Tuple[float, float]:
+    """Check current memory usage in GB"""
+    try:
+        import psutil
+        memory = psutil.virtual_memory()
+        used_gb = (memory.total - memory.available) / (1024**3)
+        available_gb = memory.available / (1024**3)
+        return used_gb, available_gb
+    except ImportError:
+        logger.warning("psutil not available - cannot monitor memory")
+        return 0.0, 8.0  # fallback values
+
+def wait_for_memory(required_gb: float = 4.0, timeout_minutes: int = 10) -> bool:
+    """Wait for sufficient memory to be available"""
+    timeout_seconds = timeout_minutes * 60
+    start_time = time.time()
+
+    while time.time() - start_time < timeout_seconds:
+        used_gb, available_gb = check_memory_usage()
+
+        if available_gb >= required_gb:
+            logger.info(f"Memory OK: {available_gb:.1f}GB available (need {required_gb:.1f}GB)")
+            return True
+
+        logger.warning(f"Low memory: {available_gb:.1f}GB available, need {required_gb:.1f}GB")
+        logger.info("Forcing memory cleanup and waiting...")
+
+        cleanup_memory()
+        time.sleep(30)  # Wait 30 seconds before checking again
+
+    logger.error(f"Timeout waiting for memory after {timeout_minutes} minutes")
+    return False
+
+def create_results_index(output_dir: Path, batch_results: dict):
+    """Create an index file for easy viewing of batch results"""
+    try:
+        index_file = output_dir / "batch_results_index.html"
+
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Batch Processing Results</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        .summary {{ background-color: #f0f0f0; padding: 10px; border-radius: 5px; }}
+        .success {{ color: green; }}
+        .failed {{ color: red; }}
+        table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+    </style>
+</head>
+<body>
+    <h1>RF Pipeline Batch Processing Results</h1>
+
+    <div class="summary">
+        <h2>Summary</h2>
+        <p><strong>Total Files:</strong> {batch_results['total_files']}</p>
+        <p><strong class="success">Completed:</strong> {len(batch_results['completed'])}</p>
+        <p><strong class="failed">Failed:</strong> {len(batch_results['failed'])}</p>
+        <p><strong>Success Rate:</strong> {len(batch_results['completed']) / batch_results['total_files'] * 100:.1f}%</p>
+        <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+    </div>
+
+    <h2>File Details</h2>
+    <table>
+        <tr>
+            <th>File</th>
+            <th>Status</th>
+            <th>Results Directory</th>
+        </tr>
+"""
+
+        # Add completed files
+        for file_path in batch_results['completed']:
+            file_name = Path(file_path).name
+            html_content += f"""
+        <tr>
+            <td>{file_name}</td>
+            <td class="success">✅ Completed</td>
+            <td>Check output directory for timestamped folder</td>
+        </tr>"""
+
+        # Add failed files
+        for file_path in batch_results['failed']:
+            file_name = Path(file_path).name
+            html_content += f"""
+        <tr>
+            <td>{file_name}</td>
+            <td class="failed">❌ Failed</td>
+            <td>Check logs for error details</td>
+        </tr>"""
+
+        html_content += """
+    </table>
+</body>
+</html>"""
+
+        with open(index_file, 'w') as f:
+            f.write(html_content)
+
+        logger.info(f"Results index created: {index_file}")
+
+    except Exception as e:
+        logger.warning(f"Could not create results index: {e}")
 
 # ---------- Command Building ----------
 
@@ -961,6 +1269,384 @@ def build_secure_command(py_exe: str, script_path: Path, args_dict: Dict[str, An
 
 # ---------- Main Pipeline Function ----------
 
+def process_single_file(wav_path: Path, validated: dict, args) -> dict:
+    """
+    Process a single WAV file through the entire pipeline.
+
+    Args:
+        wav_path: Path to WAV file
+        validated: Validated parameters
+        args: Command line arguments
+
+    Returns:
+        Dictionary with processing results
+    """
+    py_exe = validated['python']
+    out_base = validated['out_dir']
+
+    logger.info(f"Processing WAV file: {wav_path}")
+    logger.info(f"Output directory: {out_base}")
+
+    # Create run directory based on WAV filename and timestamp
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_name = f"{timestamp}_{wav_path.stem}"
+    run_dir = out_base / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Add run directory to cleanup list
+    cleanup_dirs.add(run_dir)
+
+    results = {}
+
+    # --- Step 1: Sanity Check ---
+    logger.info("=== Step 1: Sanity Check ===")
+
+    step1_args = {
+        'wav': str(wav_path),
+        'out_dir': str(run_dir),
+        'mem_budget_mb': max(64, validated.get('mem_budget_mb', 512))
+    }
+
+    if validated.get('fs_hint'):
+        step1_args['fs_hint'] = validated['fs_hint']
+    if validated.get('fft_size'):
+        step1_args['fft_size'] = validated['fft_size']
+    if validated.get('chunk_mode') and validated.get('start_time') is not None:
+        step1_args['start_time'] = validated['start_time']
+        if validated.get('end_time') is not None:
+            step1_args['end_time'] = validated['end_time']
+
+    step1_cmd = build_secure_command(py_exe, validated['sanity_script'], step1_args)
+
+    logger.info(f"Command: {sanitize_command_for_logging(step1_cmd)}")
+
+    rc1, out1 = execute_step_with_retry(
+        step1_cmd, "Step-1",
+        cwd=validated.get('sanity_path'),
+        timeout=args.timeout,
+        max_retries=args.max_retries
+    )
+
+    # Parse Step-1 results
+    results1 = {}
+    try:
+        # Try multiple possible Step-1 output files
+        step1_candidates = [
+            run_dir / "summary.json",
+            run_dir / f"sanity_check_{wav_path.stem}_stats.json"
+        ]
+
+        # Also look for stats files in subdirectories
+        for subdir in run_dir.iterdir():
+            if subdir.is_dir():
+                step1_candidates.append(subdir / f"sanity_check_{wav_path.stem}_stats.json")
+
+        step1_loaded = False
+        for candidate in step1_candidates:
+            if candidate.exists():
+                with open(candidate, 'r') as f:
+                    results1 = json.load(f)
+                logger.info(f"Loaded Step-1 results from {candidate.name}: {len(results1)} items")
+                step1_loaded = True
+                break
+
+        if not step1_loaded:
+            logger.warning("Step-1 summary.json not found")
+    except Exception as e:
+        logger.warning(f"Could not parse Step-1 results: {e}")
+
+    results['step1'] = results1
+
+    if not validated['run_step2']:
+        logger.info("Step 2 and beyond skipped per configuration")
+        return results
+
+    # Parse Step-1 results for I/Q convention mapping
+    best_conv_step1 = results1.get("best_convention", "I+Q")
+    mapped_conv = map_iq_convention_secure(best_conv_step1)
+    logger.info(f"I/Q convention: {best_conv_step1} -> {mapped_conv}")
+
+    # Only continue if Step 2 is enabled
+    if validated['run_step2']:
+        # --- Step 2: Wideband exploration ---
+        logger.info("=== Step 2: Wideband Exploration ===")
+
+        step2_args = {
+            'wav': str(wav_path),
+            'out': str(run_dir),
+            'nperseg': validated.get('nperseg', 4096),
+            'overlap': validated.get('overlap', 0.5),
+            'prom_db': validated.get('prom_db', 8.0),
+            'cfar_k': validated.get('cfar_k', 3.0),
+            'cfar_guard': validated.get('cfar_guard', 1),
+            'cfar_train': validated.get('cfar_train', 6),
+            'conv': mapped_conv
+        }
+
+        if validated.get('fs_hint'):
+            step2_args['fs_hint'] = validated['fs_hint']
+
+        # For batch mode, automatically set max_duration for memory safety on large files
+        logger.info(f"Batch mode check: validated.get('batch_mode')={validated.get('batch_mode')}")
+        if validated.get('batch_mode'):
+            # Get file duration from Step 1 results if available
+            file_duration_s = results1.get('file_duration_s', 0)
+            logger.info(f"File duration from Step 1: {file_duration_s}s")
+            if file_duration_s > 3.0:  # If file is longer than 3 seconds
+                # Use a very conservative max_duration to prevent memory issues (aim for < 2GB memory usage)
+                safe_duration = min(3.0, file_duration_s)
+                step2_args['max_duration'] = safe_duration
+                logger.info(f"Batch mode: Setting max_duration={safe_duration}s for memory safety (file duration: {file_duration_s:.1f}s)")
+            elif validated.get('max_duration') and args.max_duration != 60.0:
+                step2_args['max_duration'] = validated['max_duration']
+        elif validated.get('max_duration') and args.max_duration != 60.0:
+            step2_args['max_duration'] = validated['max_duration']
+        if validated.get('force_full'):
+            step2_args['force_full'] = True
+        if validated.get('adaptive_sampling'):
+            step2_args['adaptive_sampling'] = True
+
+        step2_cmd = build_secure_command(py_exe, validated['step2_script'], step2_args)
+        logger.info(f"Command: {sanitize_command_for_logging(step2_cmd)}")
+
+        rc2, out2 = execute_step_with_retry(
+            step2_cmd, "Step-2",
+            cwd=validated.get('step2_path'),
+            timeout=args.timeout,
+            max_retries=args.max_retries
+        )
+
+    # Only run Step 3B if enabled (Signal slicing for ML)
+    if validated['run_step3b']:
+        # Check for carriers CSV (required for Step 3B)
+        carriers_csv = run_dir / "carriers.csv"
+        if not carriers_csv.is_file():
+            logger.warning("No carriers.csv found - Step 3B requires Step 2 carrier detection")
+            logger.info("Skipping Step 3B due to missing carriers.csv")
+        else:
+            # --- Step 3B: ML Signal Slicing (creates HDF5) ---
+            logger.info("=== Step 3B: ML Signal Slicing (HDF5) ===")
+
+            step3b_out_dir = validated['out_dir'] / args.step3b_out
+            step3b_out_dir.mkdir(parents=True, exist_ok=True)
+
+            step3b_args = {
+                'wav': str(wav_path),
+                'carriers_csv': str(carriers_csv),
+                'mode': args.step3b_mode,
+                'win': validated.get('step3b_win', 16384),
+                'hop_frac': validated.get('step3b_hop_frac', 0.5),
+                'oversample': args.step3b_oversample,
+                'min_bw': validated.get('step3b_min_bw', 100000),
+                'out': str(step3b_out_dir),
+                'conv': mapped_conv
+            }
+
+            if validated.get('fs_hint'):
+                step3b_args['fs_hint'] = validated['fs_hint']
+
+            step3b_cmd = build_secure_command(py_exe, validated['step3b_script'], step3b_args)
+            logger.info(f"Command: {sanitize_command_for_logging(step3b_cmd)}")
+
+            step3b_timeout = validated.get('step3b_timeout', 600)
+            logger.info(f"Step 3B timeout set to {step3b_timeout} seconds")
+
+            rc3b, out3b = execute_step_with_retry(
+                step3b_cmd, "Step-3B",
+                cwd=validated.get('step3b_path'),
+                timeout=step3b_timeout,
+                max_retries=args.max_retries
+            )
+
+    # Only run Step 4 if enabled (Feature extraction)
+    if validated['run_step4']:
+        step3b_out_dir = validated['out_dir'] / args.step3b_out
+        slices_h5 = step3b_out_dir / "slices.h5"
+        meta_json = step3b_out_dir / "meta.json"
+
+        if not (slices_h5.is_file() and meta_json.is_file()):
+            logger.warning("Step 4 requires Step 3B outputs (slices.h5 and meta.json)")
+            logger.info("Skipping Step 4 due to missing Step 3B outputs")
+        else:
+            # --- Step 4: Feature Extraction ---
+            logger.info("=== Step 4: Feature Extraction ===")
+
+            step4_out_dir = validated['out_dir'] / args.step4_out
+            step4_out_dir.mkdir(parents=True, exist_ok=True)
+
+            step4_args = {
+                'slices_h5': str(slices_h5),
+                'meta_json': str(meta_json),
+                'out_dir': str(step4_out_dir),
+                'nperseg': validated.get('step4_nperseg', 2048),
+                'overlap': args.step4_overlap,
+                'extras': args.step4_extras
+            }
+
+            if args.step4_emit_h5:
+                step4_args['emit_engineered_h5'] = True
+
+            step4_cmd = build_secure_command(py_exe, validated['step4_script'], step4_args)
+            logger.info(f"Command: {sanitize_command_for_logging(step4_cmd)}")
+
+            rc4, out4 = execute_step_with_retry(
+                step4_cmd, "Step-4",
+                cwd=validated.get('step4_path'),
+                timeout=args.timeout,
+                max_retries=args.max_retries
+            )
+
+    # Only run Step 5 if enabled (Inference)
+    if validated['run_step5']:
+        step5_out_dir = run_dir / args.step5_out
+        step5_out_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Step 5: Inference ---
+        logger.info("=== Step 5: Inference ===")
+
+        step5_args = {
+            'in': str(wav_path),
+            'model_ts': args.step5_model,
+            'labels_json': args.step5_labels,
+            'out_dir': str(step5_out_dir),
+            'device': args.step5_device,
+            'seg': args.step5_seg,
+            'batch_size': validated.get('step5_batch_size', 64)
+        }
+
+        if validated.get('fs_hint'):
+            step5_args['sr'] = int(validated['fs_hint'])
+
+        if args.step5_auto_vad:
+            step5_args['auto_vad'] = True
+
+        # Set channel order based on Step 1 results
+        try:
+            if best_conv_step1 == "Q+jI":
+                step5_args['channel_order'] = 'QI'
+            elif best_conv_step1 in ["I+jQ", "I-jQ"]:
+                step5_args['channel_order'] = 'IQ'
+            else:
+                step5_args['channel_order'] = 'IQ'  # default
+        except:
+            step5_args['channel_order'] = 'IQ'  # fallback
+
+        step5_cmd = build_secure_command(py_exe, validated['step5_script'], step5_args)
+        logger.info(f"Command: {sanitize_command_for_logging(step5_cmd)}")
+
+        step5_timeout = validated.get('step5_timeout', 1200)
+        logger.info(f"Step 5 timeout set to {step5_timeout} seconds")
+
+        rc5, out5 = execute_step_with_retry(
+            step5_cmd, "Step-5",
+            cwd=validated.get('step5_path'),
+            timeout=step5_timeout,
+            max_retries=args.max_retries
+        )
+
+    # Success - don't clean up successful runs
+    if run_dir in cleanup_dirs:
+        cleanup_dirs.remove(run_dir)
+
+    logger.info("=== Single File Pipeline Completed Successfully ===")
+    logger.info(f"All outputs in: {run_dir}")
+
+    return results
+
+
+def process_batch(wav_files: List[Path], validated: dict, args) -> dict:
+    """
+    Process multiple WAV files sequentially with checkpointing.
+
+    Args:
+        wav_files: List of WAV file paths
+        validated: Validated parameters
+        args: Command line arguments
+
+    Returns:
+        Dictionary with batch processing results
+    """
+    logger.info(f"Starting batch processing of {len(wav_files)} files")
+
+    # Initialize batch progress tracking
+    out_base = validated['out_dir']
+    batch_progress = BatchProgress(out_base)
+
+    # Progress info is already loaded in constructor
+    if args.resume and (batch_progress.completed_files or batch_progress.failed_files):
+        logger.info(f"Resuming: {len(batch_progress.completed_files)} completed, {len(batch_progress.failed_files)} failed")
+
+    batch_results = {
+        'total_files': len(wav_files),
+        'completed': [],
+        'failed': [],
+        'results': {}
+    }
+
+    start_time = time.time()
+
+    for idx, wav_file in enumerate(wav_files, 1):
+        wav_str = str(wav_file)
+
+        # Skip if already completed
+        if wav_str in batch_progress.completed_files:
+            logger.info(f"[{idx}/{len(wav_files)}] Skipping completed file: {wav_file.name}")
+            batch_results['completed'].append(wav_str)
+            continue
+
+        logger.info(f"[{idx}/{len(wav_files)}] Processing: {wav_file.name}")
+
+        # Memory check before processing
+        used_gb, available_gb = check_memory_usage()
+        if available_gb < args.batch_memory_limit_gb:
+            logger.warning(f"Low memory: {available_gb:.1f}GB available, waiting...")
+            wait_for_memory(args.batch_memory_limit_gb)
+
+        try:
+            # Process single file
+            file_results = process_single_file(wav_file, validated, args)
+
+            # Mark as completed
+            batch_progress.complete_file(wav_file, success=True)
+            batch_results['completed'].append(wav_str)
+            batch_results['results'][wav_str] = file_results
+
+            logger.info(f"[{idx}/{len(wav_files)}] Completed: {wav_file.name}")
+
+        except Exception as e:
+            logger.error(f"[{idx}/{len(wav_files)}] Failed: {wav_file.name} - {e}")
+            batch_progress.complete_file(wav_file, success=False)
+            batch_results['failed'].append(wav_str)
+
+        # Memory cleanup between files
+        cleanup_memory()
+
+        # Progress reporting
+        elapsed = time.time() - start_time
+        if idx > 0:
+            avg_time = elapsed / idx
+            remaining = len(wav_files) - idx
+            eta = avg_time * remaining
+            logger.info(f"Progress: {idx}/{len(wav_files)}, ETA: {eta/3600:.1f}h ({eta/60:.0f}min)")
+
+    # Final results
+    total_time = time.time() - start_time
+    success_rate = len(batch_results['completed']) / len(wav_files)
+
+    logger.info(f"Batch processing completed:")
+    logger.info(f"  Total files: {len(wav_files)}")
+    logger.info(f"  Completed: {len(batch_results['completed'])}")
+    logger.info(f"  Failed: {len(batch_results['failed'])}")
+    logger.info(f"  Success rate: {success_rate*100:.1f}%")
+    logger.info(f"  Total time: {total_time/3600:.1f}h ({total_time/60:.0f}min)")
+
+    # Save batch summary
+    if args.batch_results_index:
+        create_results_index(out_base, batch_results)
+
+    return batch_results
+
+
 def main():
     """Main pipeline execution with comprehensive error handling."""
 
@@ -975,7 +1661,7 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    ap.add_argument("wav", help="Path to I/Q .wav file (stereo, supports RIFF and RF64 formats)")
+    ap.add_argument("wav", nargs='+', help="Path(s) to I/Q .wav file(s) or directories containing WAV files")
     ap.add_argument("--fs_hint", type=float, default=None,
                    help="Override WAV header Fs (Hz)")
     ap.add_argument("--out_dir", default="out_report",
@@ -1008,8 +1694,16 @@ def main():
                    help="CFAR training cells")
     ap.add_argument("--max_duration", type=float, default=60.0,
                    help="Max processing duration for Step-2 sampling")
+    ap.add_argument("--start_time", type=float, default=0.0,
+                   help="Start time (seconds) within the file")
+    ap.add_argument("--end_time", type=float, default=None,
+                   help="End time (seconds) within the file (None for end of file)")
+    ap.add_argument("--chunk_mode", action="store_true",
+                   help="Enable chunk processing mode (process only specified time segment)")
     ap.add_argument("--force_full", action="store_true",
                    help="Force full Step-2 processing (no sampling)")
+    ap.add_argument("--adaptive_sampling", action="store_true",
+                   help="Use adaptive sampling strategy to optimize IRR in Step-2")
     ap.add_argument("--step2_path", default=None,
                    help="Working dir for Step-2 (optional)")
 
@@ -1104,6 +1798,8 @@ def main():
                    help="Run only Steps 1-3B (up to ML signal slicing)")
     ap.add_argument("--only_step4", action="store_true",
                    help="Run only Steps 1-4 (up to feature extraction)")
+    ap.add_argument("--only_step5", action="store_true",
+                   help="Run only Step 5 (inference only - requires existing data)")
     ap.add_argument("--skip_step3b", action="store_true",
                    help="Skip Step 3B (ML signal slicing)")
     ap.add_argument("--skip_step4", action="store_true",
@@ -1121,6 +1817,16 @@ def main():
     ap.add_argument("--strict_paths", action="store_true",
                    help="Use strict path validation (only current dir and subdirs)")
 
+    # Batch processing options
+    ap.add_argument("--batch_mode", action="store_true",
+                   help="Enable batch processing mode for multiple files")
+    ap.add_argument("--resume", action="store_true",
+                   help="Resume interrupted batch processing")
+    ap.add_argument("--batch_memory_limit_gb", type=float, default=6.0,
+                   help="Memory limit (GB) for batch processing safety")
+    ap.add_argument("--batch_results_index", action="store_true",
+                   help="Create results index file for easy viewing")
+
     try:
         args = ap.parse_args()
 
@@ -1132,285 +1838,20 @@ def main():
         logger.info("Validating inputs...")
         validated = validate_all_inputs(args)
 
-        wav_path = validated['wav_path']
         out_base = validated['out_dir']
         py_exe = validated['python']
 
-        logger.info(f"Processing WAV file: {wav_path}")
-        logger.info(f"Output directory: {out_base}")
+        # Handle batch mode vs single file mode
+        if validated['batch_mode']:
+            logger.info(f"Batch processing mode: {len(validated['wav_files'])} files")
+            process_batch(validated['wav_files'], validated, args)
+        else:
+            wav_path = validated['wav_path']
+            logger.info(f"Single file processing: {wav_path}")
+            logger.info(f"Output directory: {out_base}")
+            process_single_file(wav_path, validated, args)
 
-        # --- Step 1: Sanity Check ---
-        logger.info("=== Step 1: Sanity Check ===")
-
-        step1_args = {
-            'wav': str(wav_path),
-            'out_dir': str(out_base),
-            'mem_budget_mb': max(64, validated.get('mem_budget_mb', 512))
-        }
-
-        if validated.get('fs_hint'):
-            step1_args['fs_hint'] = validated['fs_hint']
-        if validated.get('fft_size'):
-            step1_args['fft_size'] = validated['fft_size']
-
-        step1_cmd = build_secure_command(py_exe, validated['sanity_script'], step1_args)
-
-        logger.info(f"Command: {sanitize_command_for_logging(step1_cmd)}")
-        rc1, out1 = execute_step_with_retry(
-            step1_cmd, "Step-1",
-            cwd=validated.get('sanity_path'),
-            timeout=args.timeout,
-            max_retries=args.max_retries
-        )
-
-        # Parse Step-1 results
-        results1 = extract_json_robust(out1)
-        best_conv_step1 = results1.get("best_convention", "I+Q")
-        mapped_conv = map_iq_convention_secure(best_conv_step1)
-
-        # Find run directory
-        run_dir = extract_run_dir_robust(out1, out_base, wav_path.stem)
-        if run_dir is None:
-            raise PipelineError("Could not locate Step-1 run directory")
-
-        logger.info(f"Run directory: {run_dir}")
-        logger.info(f"I/Q convention: {best_conv_step1} -> {mapped_conv}")
-
-        # --- Step 2: Wideband Exploration ---
-        if validated['run_step2']:
-            logger.info("=== Step 2: Wideband Exploration ===")
-
-            step2_args = {
-                'wav': str(wav_path),
-                'out': str(run_dir),
-                'conv': mapped_conv,
-                'nperseg': validated.get('nperseg', 4096),
-                'overlap': validated.get('overlap', 0.5),
-                'prom_db': validated.get('prom_db', 8.0),
-                'cfar_k': validated.get('cfar_k', 3.0),
-                'cfar_guard': validated.get('cfar_guard', 1),
-                'cfar_train': validated.get('cfar_train', 6),
-                'max_duration': validated.get('max_duration', 60.0)
-            }
-
-            if validated.get('fs_hint'):
-                step2_args['fs_hint'] = validated['fs_hint']
-            if validated.get('force_full'):
-                step2_args['force_full'] = True
-
-            step2_cmd = build_secure_command(py_exe, validated['step2_script'], step2_args)
-
-            logger.info(f"Command: {sanitize_command_for_logging(step2_cmd)}")
-            rc2, out2 = execute_step_with_retry(
-                step2_cmd, "Step-2",
-                cwd=validated.get('step2_path'),
-                timeout=args.timeout,
-                max_retries=args.max_retries
-            )
-
-        # --- Step 3: Signal Detection & Slicing ---
-        if validated['run_step3']:
-            logger.info("=== Step 3: Signal Detection & Slicing ===")
-
-            step3_args = {
-                'wav': str(wav_path),
-                'out': str(run_dir),
-                'mem_budget_mb': max(64, validated.get('step3_mem_budget_mb', 512)),
-                'rms_win_ms': validated.get('step3_rms_win_ms', 5.0),
-                'thresh_dbfs': validated.get('step3_thresh_dbfs', -60.0),
-                'min_dur_ms': validated.get('step3_min_dur_ms', 5.0),
-                'gap_ms': validated.get('step3_gap_ms', 3.0),
-                'pad_ms': validated.get('step3_pad_ms', 2.0),
-                'max_slices': validated.get('step3_max_slices', 1000)
-            }
-
-            if validated.get('fs_hint'):
-                step3_args['fs_hint'] = validated['fs_hint']
-            if validated.get('step3_write_audio'):
-                step3_args['write_audio'] = True
-
-            step3_cmd = build_secure_command(py_exe, validated['step3_script'], step3_args)
-
-            logger.info(f"Command: {sanitize_command_for_logging(step3_cmd)}")
-            rc3, out3 = execute_step_with_retry(
-                step3_cmd, "Step-3",
-                cwd=validated.get('step3_path'),
-                timeout=args.timeout,
-                max_retries=args.max_retries
-            )
-
-        # Initialize variables for later steps
-        slices_h5_path = None
-        slices_meta_path = None
-
-        # --- Step 3B: Signal Slicing for ML ---
-        if validated['run_step3b']:
-            logger.info("=== Step 3B: Signal Slicing for ML ===")
-            logger.warning("Step 3B can be very slow for large files. Use --skip_step3b to skip this step if needed.")
-
-            # Create output directory for slices
-            step3b_out_dir = out_base / validated.get('step3b_out', 'slices_out')
-            step3b_out_dir.mkdir(parents=True, exist_ok=True)
-
-            # Check that carriers.csv exists from step 2
-            carriers_csv = run_dir / "carriers.csv"
-            if not carriers_csv.exists():
-                logger.warning("carriers.csv not found, Step 3B may fail")
-
-            step3b_args = {
-                'wav': str(wav_path),
-                'fs_hint': validated.get('fs_hint'),
-                'carriers_csv': str(carriers_csv),
-                'mode': validated.get('step3b_mode', 'carriers'),
-                'win': validated.get('step3b_win', 16384),
-                'hop_frac': validated.get('step3b_hop_frac', 0.5),
-                'oversample': validated.get('step3b_oversample', 4.0),
-                'min_bw': validated.get('step3b_min_bw', 100000),
-                'out': str(step3b_out_dir)
-            }
-
-            # Add optional parameters for burst mode
-            if validated.get('step3b_mode') == 'bursts':
-                step3b_args.update({
-                    'nperseg': validated.get('nperseg', 4096),
-                    'overlap': validated.get('overlap', 0.5),
-                    'cfar_k': validated.get('cfar_k', 3.0)
-                })
-
-            step3b_cmd = build_secure_command(py_exe, validated['step3b_script'], step3b_args)
-
-            logger.info(f"Command: {sanitize_command_for_logging(step3b_cmd)}")
-
-            # Use configured timeout for Step 3B
-            step3b_timeout = validated.get('step3b_timeout', 600)
-            logger.info(f"Step 3B timeout set to {step3b_timeout} seconds")
-
-            try:
-                rc3b, out3b = execute_step_with_retry(
-                    step3b_cmd, "Step-3B",
-                    cwd=validated.get('step3b_path'),
-                    timeout=step3b_timeout,
-                    max_retries=1  # Only 1 retry for Step 3B to avoid very long waits
-                )
-                # Set paths for Step 4 only if Step 3B succeeds
-                slices_h5_path = step3b_out_dir / "slices.h5"
-                slices_meta_path = step3b_out_dir / "meta.json"
-            except (TimeoutError, PipelineError) as e:
-                logger.error(f"Step 3B failed or timed out: {e}")
-                logger.warning("Skipping Step 3B due to timeout. Use --skip_step3b to avoid this in future runs.")
-                logger.warning("Or try with a smaller file or --only_step3 to stop before Step 3B.")
-                validated['run_step3b'] = False  # Disable for Step 4 dependency check
-                validated['run_step4'] = False   # Also disable Step 4 since it depends on 3B
-
-        # --- Step 4: Feature Extraction ---
-        if validated['run_step4']:
-            logger.info("=== Step 4: Feature Extraction ===")
-
-            if not validated['run_step3b']:
-                logger.error("Step 4 requires Step 3B to be enabled")
-                raise PipelineError("Step 4 requires Step 3B slicing outputs")
-
-            if not slices_h5_path or not slices_h5_path.exists():
-                logger.error(f"Required slices.h5 not found at {slices_h5_path}")
-                raise PipelineError("Step 4 requires slices.h5 from Step 3B")
-
-            if not slices_meta_path or not slices_meta_path.exists():
-                logger.error(f"Required meta.json not found at {slices_meta_path}")
-                raise PipelineError("Step 4 requires meta.json from Step 3B")
-
-            # Create output directory for features
-            step4_out_dir = out_base / validated.get('step4_out', 'step4_out')
-            step4_out_dir.mkdir(parents=True, exist_ok=True)
-
-            step4_args = {
-                'slices_h5': str(slices_h5_path),
-                'meta_json': str(slices_meta_path),
-                'out_dir': str(step4_out_dir),
-                'nperseg': validated.get('step4_nperseg', 2048),
-                'overlap': validated.get('step4_overlap', 0.5),
-                'extras': validated.get('step4_extras', 'amp,phase,dfreq,cosphi,sinphi,d_amp,d2phase,cum40,cum41,cum42')
-            }
-
-            if validated.get('step4_emit_h5', False):
-                step4_args['emit_engineered_h5'] = True
-
-            step4_cmd = build_secure_command(py_exe, validated['step4_script'], step4_args)
-
-            logger.info(f"Command: {sanitize_command_for_logging(step4_cmd)}")
-            rc4, out4 = execute_step_with_retry(
-                step4_cmd, "Step-4",
-                cwd=validated.get('step4_path'),
-                timeout=args.timeout,
-                max_retries=args.max_retries
-            )
-
-        # --- Step 5: Inference ---
-        if validated['run_step5']:
-            logger.info("=== Step 5: Inference ===")
-
-            # Create output directory for inference
-            step5_out_dir = out_base / validated.get('step5_out', 'step5_out')
-            step5_out_dir.mkdir(parents=True, exist_ok=True)
-
-            # Validate required model and labels files exist
-            model_path = Path(validated.get('step5_model', 'Model/best_model_script_cuda.pt'))
-            labels_path = Path(validated.get('step5_labels', 'Model/selected_labels.json'))
-
-            if not model_path.exists():
-                logger.error(f"Required model file not found: {model_path}")
-                raise PipelineError(f"Step 5 requires model file: {model_path}")
-
-            if not labels_path.exists():
-                logger.error(f"Required labels file not found: {labels_path}")
-                raise PipelineError(f"Step 5 requires labels file: {labels_path}")
-
-            step5_args = {
-                'in': str(wav_path),
-                'model_ts': str(model_path),
-                'labels_json': str(labels_path),
-                'out_dir': str(step5_out_dir),
-                'device': validated.get('step5_device', 'cuda'),
-                'seg': validated.get('step5_seg', 10.0),
-                'batch_size': validated.get('step5_batch_size', 64),
-                'tag': f"pipeline_{wav_path.stem}"
-            }
-
-            # Add sample rate if available
-            if validated.get('fs_hint'):
-                step5_args['sr'] = validated['fs_hint']
-
-            # Add auto VAD if enabled
-            if validated.get('step5_auto_vad'):
-                step5_args['auto_vad'] = True
-
-            step5_cmd = build_secure_command(py_exe, validated['step5_script'], step5_args)
-
-            logger.info(f"Command: {sanitize_command_for_logging(step5_cmd)}")
-
-            # Use configured timeout for Step 5
-            step5_timeout = validated.get('step5_timeout', 1200)
-            logger.info(f"Step 5 timeout set to {step5_timeout} seconds")
-
-            rc5, out5 = execute_step_with_retry(
-                step5_cmd, "Step-5",
-                cwd=validated.get('step5_path'),
-                timeout=step5_timeout,
-                max_retries=args.max_retries
-            )
-
-        # Success
-        logger.info("=== Pipeline Completed Successfully ===")
-        logger.info(f"All outputs in: {run_dir}")
-        if validated['run_step3b'] and 'step3b_out_dir' in locals():
-            logger.info(f"Slices in: {step3b_out_dir}")
-        if validated['run_step4'] and 'step4_out_dir' in locals():
-            logger.info(f"Features in: {step4_out_dir}")
-        if validated['run_step5'] and 'step5_out_dir' in locals():
-            logger.info(f"Inference in: {step5_out_dir}")
-
-        # Don't clean up successful runs
-        if run_dir in cleanup_dirs:
-            cleanup_dirs.remove(run_dir)
+        logger.info("=== All Processing Completed Successfully ===")
 
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user")

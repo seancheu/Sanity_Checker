@@ -1,0 +1,48 @@
+{
+  "I_clip_pct": 0.0,
+  "I_max": 0.067413330078125,
+  "I_mean": 1.173054911091159e-06,
+  "I_min": -0.072540283203125,
+  "I_peak_abs": 0.072540283203125,
+  "I_rms": 0.011241555348883998,
+  "I_std": 0.011241554945897004,
+  "Q_clip_pct": 0.0,
+  "Q_max": 0.065521240234375,
+  "Q_mean": -9.970009507389047e-07,
+  "Q_min": -0.060089111328125,
+  "Q_peak_abs": 0.065521240234375,
+  "Q_rms": 0.01123777498199691,
+  "Q_std": 0.011237774596116716,
+  "analysis_duration_s": 70.30113077163696,
+  "analysis_params": {
+    "chunk_frames": 16777216,
+    "fft_size": 262144,
+    "mem_budget_mb": 512,
+    "passes": 2
+  },
+  "analysis_timestamp": "2025-09-24 15:32:50",
+  "best_convention": "Q+jI",
+  "best_irr_db": 0.3821439237152738,
+  "channels": 2,
+  "coverage_fraction": 1.0,
+  "covered_duration_s": 27.9642112,
+  "envelope_kurtosis": 3.184328275270108,
+  "file_duration_s": 27.9642112,
+  "frames": 559284224,
+  "fs_header_hz": 20000000.0,
+  "fs_used_hz": 20000000.0,
+  "inf_count": 0,
+  "input_file": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-27-07_538000000Hz-005.wav",
+  "nan_count": 0,
+  "quality_assessment": {
+    "issues": [
+      "Poor I/Q balance (IRR: 0.4 dB)"
+    ],
+    "quality_score": 85.0,
+    "recommendations": [
+      "Consider using --conv Q I in downstream processing"
+    ],
+    "warnings": []
+  },
+  "sampling_strategy": "stream_full(mem_budget_mb=512, chunk_frames=16777216)"
+}

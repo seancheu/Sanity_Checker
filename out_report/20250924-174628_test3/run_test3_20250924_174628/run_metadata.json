@@ -1,0 +1,13 @@
+{
+  "args": {
+    "fft_size": null,
+    "fs_hint": 20000000.0,
+    "mem_budget_mb": 512,
+    "out_dir_base": "C:\\Users\\Sean_Temp\\Documents\\Sanity_Checker\\out_report\\20250924-174628_test3",
+    "quiet": false,
+    "verbose": false
+  },
+  "created_at": "2025-09-24 17:47:39",
+  "input_file": "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test3.wav",
+  "run_dir": "C:\\Users\\Sean_Temp\\Documents\\Sanity_Checker\\out_report\\20250924-174628_test3\\run_test3_20250924_174628"
+}

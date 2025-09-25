@@ -249,9 +249,10 @@ def compute_chunk_size_samples(mem_budget_mb: int, channels: int, floor_fft: int
     # keep a sane upper bound to avoid extremely long per-FFT time
     return int(min(chunk, 16 * 1024 * 1024))  # cap ~16M frames per chunk
 
-def pass1_stats_and_irr(filepath: Path, fs: float, fft_size: int, chunk_frames: int) -> Tuple[Dict[str, Any], Dict[str, float]]:
+def pass1_stats_and_irr(filepath: Path, fs: float, fft_size: int, chunk_frames: int,
+                       start_time: float = 0.0, end_time: float = None) -> Tuple[Dict[str, Any], Dict[str, float]]:
     """
-    Stream over the entire file:
+    Stream over the entire file or time window:
     - Running stats for I and Q (mean/std/min/max/rms/clip)
     - Accumulate pos/neg powers for each convention for IRR
     Returns:
@@ -264,6 +265,22 @@ def pass1_stats_and_irr(filepath: Path, fs: float, fft_size: int, chunk_frames: 
     if channels < 2:
         raise SanityCheckError(f"Need 2 channels (I,Q), got {channels}")
 
+    # Calculate frame window for time-based processing
+    start_frame = int(start_time * fs)
+    if end_time is not None:
+        end_frame = min(int(end_time * fs), total_frames)
+    else:
+        end_frame = total_frames
+
+    # Adjust for valid range
+    start_frame = max(0, min(start_frame, total_frames - 1))
+    end_frame = max(start_frame + 1, min(end_frame, total_frames))
+
+    logger.info(f"Processing frames {start_frame:,} to {end_frame:,} ({(end_frame-start_frame)/fs:.1f}s)")
+
+    # Update total_frames to window size
+    window_frames = end_frame - start_frame
+
     I_stats = RunningStats()
     Q_stats = RunningStats()
 
@@ -274,12 +291,12 @@ def pass1_stats_and_irr(filepath: Path, fs: float, fft_size: int, chunk_frames: 
         "Q_I": {"pos": 0.0, "neg": 0.0},
     }
 
-    # Iterate chunks
-    start = 0
+    # Iterate chunks within the time window
+    current_frame = start_frame
     logger.info(f"Pass 1: streaming stats + IRR (fft_size={fft_size}, chunk_frames={chunk_frames})")
-    while start < total_frames:
-        stop = min(start + chunk_frames, total_frames)
-        data = sf.read(filepath, start=start, stop=stop, always_2d=True, dtype='float32')
+    while current_frame < end_frame:
+        stop_frame = min(current_frame + chunk_frames, end_frame)
+        data = sf.read(filepath, start=current_frame, stop=stop_frame, always_2d=True, dtype='float32')
         if isinstance(data, tuple):
             data = data[0]
 
@@ -303,7 +320,7 @@ def pass1_stats_and_irr(filepath: Path, fs: float, fft_size: int, chunk_frames: 
             irr_acc[key]["pos"] += pos
             irr_acc[key]["neg"] += neg
 
-        start = stop
+        current_frame = stop_frame
 
     # Extract stats
     I_final = I_stats.finalize("I")
@@ -328,7 +345,8 @@ def pass1_stats_and_irr(filepath: Path, fs: float, fft_size: int, chunk_frames: 
         "irr_db_Q_I": 10.0 * np.log10((irr_acc["Q_I"]["pos"]) / (irr_acc["Q_I"]["neg"] + EPSILON)),
     }
 
-def pass2_envelope_kurtosis(filepath: Path, fs: float, best_convention: str, chunk_frames: int) -> float:
+def pass2_envelope_kurtosis(filepath: Path, fs: float, best_convention: str, chunk_frames: int,
+                           start_time: float = 0.0, end_time: float = None) -> float:
     """
     Stream again to compute envelope kurtosis under the chosen convention.
     """
@@ -338,12 +356,23 @@ def pass2_envelope_kurtosis(filepath: Path, fs: float, best_convention: str, chu
     if channels < 2:
         raise SanityCheckError(f"Need 2 channels (I,Q), got {channels}")
 
+    # Calculate frame window for time-based processing
+    start_frame = int(start_time * fs)
+    if end_time is not None:
+        end_frame = min(int(end_time * fs), total_frames)
+    else:
+        end_frame = total_frames
+
+    # Adjust for valid range
+    start_frame = max(0, min(start_frame, total_frames - 1))
+    end_frame = max(start_frame + 1, min(end_frame, total_frames))
+
     ok = OnlineKurtosis()
-    start = 0
+    current_frame = start_frame
     logger.info(f"Pass 2: envelope kurtosis (best convention: {best_convention}, chunk_frames={chunk_frames})")
-    while start < total_frames:
-        stop = min(start + chunk_frames, total_frames)
-        data = sf.read(filepath, start=start, stop=stop, always_2d=True, dtype='float32')
+    while current_frame < end_frame:
+        stop_frame = min(current_frame + chunk_frames, end_frame)
+        data = sf.read(filepath, start=current_frame, stop=stop_frame, always_2d=True, dtype='float32')
         if isinstance(data, tuple):
             data = data[0]
         I = data[:, 0]
@@ -363,7 +392,7 @@ def pass2_envelope_kurtosis(filepath: Path, fs: float, best_convention: str, chu
         env = np.abs(z).astype(np.float64, copy=False)
         ok.update(env)
 
-        start = stop
+        current_frame = stop_frame
 
     return ok.kurtosis()
 
@@ -489,7 +518,9 @@ def generate_output_files(stats: Dict[str, Any], assessment: Dict[str, Any],
 def perform_sanity_check_streaming(wav_file: Path, fs_hint: Optional[float],
                                    fft_size: Optional[int],
                                    mem_budget_mb: int,
-                                   output_dir: Path) -> Dict[str, Any]:
+                                   output_dir: Path,
+                                   start_time: float = 0.0,
+                                   end_time: Optional[float] = None) -> Dict[str, Any]:
     logger.info(f"Starting sanity check (streaming) for: {wav_file}")
 
     # Probe file
@@ -511,10 +542,10 @@ def perform_sanity_check_streaming(wav_file: Path, fs_hint: Optional[float],
     logger.info(f"Detected: frames={total_frames:,}, duration={file_duration_s:.2f}s, channels={channels}, fs={fs:,.0f} Hz")
     logger.info(f"Chunk planning: mem_budget_mb={mem_budget_mb}, chunk_frames={chunk_frames:,}, fft_size={use_fft}")
 
-    start_time = time.time()
+    analysis_start_time = time.time()
 
-    # Pass 1: stats + IRR totals across full file
-    ch_stats_partial, irr_db_map = pass1_stats_and_irr(wav_file, fs, use_fft, chunk_frames)
+    # Pass 1: stats + IRR totals across time window
+    ch_stats_partial, irr_db_map = pass1_stats_and_irr(wav_file, fs, use_fft, chunk_frames, start_time, end_time)
 
     # Decide best convention
     best_key = max(irr_db_map, key=lambda k: irr_db_map[k])
@@ -526,10 +557,10 @@ def perform_sanity_check_streaming(wav_file: Path, fs_hint: Optional[float],
         best_convention = "Q+jI"
     best_irr_db = float(abs(irr_db_map[best_key]))
 
-    # Pass 2: envelope kurtosis under best convention (full file)
-    env_kurt = pass2_envelope_kurtosis(wav_file, fs, best_convention, chunk_frames)
+    # Pass 2: envelope kurtosis under best convention (time window)
+    env_kurt = pass2_envelope_kurtosis(wav_file, fs, best_convention, chunk_frames, start_time, end_time)
 
-    elapsed = time.time() - start_time
+    elapsed = time.time() - analysis_start_time
 
     # Build stats
     I_only = {k: v for k, v in ch_stats_partial.items() if k.startswith("I_")}
@@ -584,6 +615,10 @@ def main():
                         help=f"FFT size for IRR analysis per chunk (default adaptive, max {MAX_FFT_SIZE})")
     parser.add_argument("--mem_budget_mb", type=int, default=512,
                         help="Approx RAM budget for one chunk (MB). Larger = fewer, bigger chunks.")
+    parser.add_argument("--start_time", type=float, default=0.0,
+                        help="Start time (seconds) within the file")
+    parser.add_argument("--end_time", type=float, default=None,
+                        help="End time (seconds) within the file (None for end of file)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("--quiet", action="store_true", help="Errors only")
     args = parser.parse_args()
@@ -610,7 +645,9 @@ def main():
             fs_hint=args.fs_hint,
             fft_size=args.fft_size,
             mem_budget_mb=max(64, args.mem_budget_mb),
-            output_dir=run_dir
+            output_dir=run_dir,
+            start_time=args.start_time,
+            end_time=args.end_time
         )
 
         # Write outputs

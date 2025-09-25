@@ -1,0 +1,23 @@
+{
+  "batch_start_time": "2025-09-24 14:31:02",
+  "last_update": "2025-09-24 18:02:41",
+  "elapsed_hours": 3.5274338742097218,
+  "completed_files": 5,
+  "failed_files": 4,
+  "total_processed": 9,
+  "success_rate": 0.5555555555555556,
+  "avg_time_per_file_hours": 0.39193709713441355,
+  "completed_list": [
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-30-37_570000000Hz-001.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-29-08_554000000Hz-002.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test2.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\13-27-07_538000000Hz-005.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\16-32-22_538000000Hz.wav"
+  ],
+  "failed_list": [
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\14-35-31_393000000Hz.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\14-34-50_393000000Hz.wav",
+    "C:\\Users\\Sean_Temp\\Documents\\Test_files\\test3.wav"
+  ]
+}

@@ -2,7 +2,7 @@
 """
 Wideband (.r64 / raw-float32 .wav via --force_raw) segmentation + classification at 20 MHz
 - Splits gigantic I/Q files into manageable chunk files on disk, then processes chunks.
-- VAD → frame-level inference → per-burst grouping across chunks.
+- VAD -> frame-level inference -> per-burst grouping across chunks.
 - For each burst (a contiguous transmission), estimate:
     • start/end time (s) and absolute timestamps (if --recording_start provided)
     • RF center (offset Hz and absolute Hz if --rf_center_hz given)
@@ -58,29 +58,54 @@ def _pcm24_to_float32(buf_bytes):
     return (b.astype(np.float32) / 8388608.0)
 
 def load_wav_iq(path, channel_order="IQ"):
-    with wave.open(path, "rb") as wf:
-        nchan = wf.getnchannels(); sampwidth = wf.getsampwidth(); sr = wf.getframerate(); nframes = wf.getnframes()
-        raw = wf.readframes(nframes)
-    if sampwidth == 1:
-        x = np.frombuffer(raw, dtype=np.uint8).astype(np.float32); x = (x - 128.0) / 127.5
-    elif sampwidth == 2:
-        x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sampwidth == 3:
-        x = _pcm24_to_float32(raw)
-    elif sampwidth == 4:
-        # Many SDR WAVs are IEEE float32; the wave module doesn't expose the format code.
-        # Treat as raw float32 samples in range [-1,1].
-        x = np.frombuffer(raw, dtype=np.float32)
-    else:
-        raise ValueError(f"Unsupported WAV sample width: {sampwidth*8} bits")
-    if nchan == 1:
-        I = x[0::2]; Q = x[1::2]
+    try:
+        # First try soundfile for RF64/RIFF support
+        import soundfile as sf
+        data, sr = sf.read(path, always_2d=True, dtype='float32')
+        data = data.T  # soundfile returns [time, channels], we want [channels, time]
+
+        if data.shape[0] == 1:
+            # Mono file - assume interleaved I/Q
+            mono = data[0]
+            I = mono[0::2]
+            Q = mono[1::2]
+        elif data.shape[0] >= 2:
+            # Stereo+ file - use first two channels as I/Q
+            I = data[0]
+            Q = data[1]
+        else:
+            raise ValueError("No audio channels found")
+
+        if channel_order.upper() == "QI":
+            I, Q = Q, I
+
+        return np.stack([I, Q], axis=0), sr
+
+    except ImportError:
+        # Fallback to wave module if soundfile not available
+        with wave.open(path, "rb") as wf:
+            nchan = wf.getnchannels(); sampwidth = wf.getsampwidth(); sr = wf.getframerate(); nframes = wf.getnframes()
+            raw = wf.readframes(nframes)
+        if sampwidth == 1:
+            x = np.frombuffer(raw, dtype=np.uint8).astype(np.float32); x = (x - 128.0) / 127.5
+        elif sampwidth == 2:
+            x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sampwidth == 3:
+            x = _pcm24_to_float32(raw)
+        elif sampwidth == 4:
+            # Many SDR WAVs are IEEE float32; the wave module doesn't expose the format code.
+            # Treat as raw float32 samples in range [-1,1].
+            x = np.frombuffer(raw, dtype=np.float32)
+        else:
+            raise ValueError(f"Unsupported WAV sample width: {sampwidth*8} bits")
+        if nchan == 1:
+            I = x[0::2]; Q = x[1::2]
+            if channel_order.upper() == "QI": I, Q = Q, I
+            return np.stack([I, Q], axis=0), sr
+        x = x.reshape(-1, nchan).T
+        I = x[0]; Q = x[1] if nchan >= 2 else np.zeros_like(I)
         if channel_order.upper() == "QI": I, Q = Q, I
         return np.stack([I, Q], axis=0), sr
-    x = x.reshape(-1, nchan).T
-    I = x[0]; Q = x[1] if nchan >= 2 else np.zeros_like(I)
-    if channel_order.upper() == "QI": I, Q = Q, I
-    return np.stack([I, Q], axis=0), sr
 
 # -------------- Framing / basic math --------------
 
@@ -231,8 +256,12 @@ def welch_psd_streaming(x,
     if N <= 0:
         return np.linspace(-0.5, 0.5, nfft, endpoint=False), np.full(nfft, -200.0, dtype=np.float64)
 
-    # Ensure types are light
+    # Ensure types are light and normalize to prevent overflow
     x = np.asarray(x, dtype=np.complex64, order="C")
+    # Normalize I/Q data to prevent FFT overflow
+    x_max = np.max(np.abs(x))
+    if x_max > 1e6:  # Scale down very large I/Q values
+        x = x / x_max * 1e3
     win = np.asarray(window(nfft), dtype=np.float32)
     win_energy = float(np.sum(win.astype(np.float64)**2) + 1e-12)
 
@@ -253,10 +282,11 @@ def welch_psd_streaming(x,
     while i + nfft <= N:
         fr = x[i:i+nfft]
         frw = fr * win
-        # Complex64 FFT → complex64 output in recent NumPy (pocketfft preserves precision)
+        # Complex64 FFT -> complex64 output in recent NumPy (pocketfft preserves precision)
         W = np.fft.fft(frw, n=nfft)
-        # Accumulate power spectrum
-        P_accum += (np.abs(W)**2).astype(np.float64, copy=False)
+        # Accumulate power spectrum with overflow protection
+        W_abs = np.abs(W).astype(np.float64, copy=False)  # Convert to float64 before squaring
+        P_accum += W_abs * W_abs  # Avoid overflow in squaring operation
         m += 1
         i += hop * skip
 
@@ -353,24 +383,31 @@ def classify_segment(x_seg, sr, labels, model, device, args, run_dir, seg_index,
     I_g, Q_g = safe_normalize_iq(x[0], x[1])
     x_norm_for_vad = np.stack([I_g, Q_g], axis=0)
 
-    # VAD thresholding
-    if args.auto_vad or (hasattr(args, 'vad_abs_dbfs') and args.vad_abs_dbfs is not None):
+    # VAD thresholding with automatic large-file detection
+    file_size_gb = x.nbytes / (1024**3)
+    use_fast_mode = file_size_gb > 1.0  # Auto-enable fast mode for files > 1GB
+
+    if use_fast_mode:
+        print(f"[vad-fast] Large file detected ({file_size_gb:.1f}GB), using fast VAD mode")
+        # Use fixed threshold for very large files to avoid processing delays
+        thr_dbfs = getattr(args, 'vad_abs_dbfs', -30.0) if hasattr(args, 'vad_abs_dbfs') and args.vad_abs_dbfs is not None else -30.0
+    elif args.auto_vad or (hasattr(args, 'vad_abs_dbfs') and args.vad_abs_dbfs is not None):
         I, Q = x_norm_for_vad
         # Base series: amplitude envelope or instantaneous power
         series = np.hypot(I.astype(np.float64), Q.astype(np.float64)) if args.envelope_vad else (I.astype(np.float64)**2 + Q.astype(np.float64)**2)
 
-        # Optional fast path: estimate threshold on a decimated/subset series
-        ds = 1
-        if getattr(args, 'fast_vad', False):
-            ds = max(1, int(args.vad_down))
+        # Aggressive fast path for large files: always decimate for VAD analysis
+        ds = max(1, int(getattr(args, 'vad_down', 200)))  # Default to 200x downsample
         series_work = series[::ds]
         sr_work = sr / ds
 
-        # Optionally cap the analyzed points for the quantile using extra striding
-        if series_work.size > getattr(args, 'auto_vad_max_points', 2_000_000):
-            step2 = int(math.ceil(series_work.size / float(args.auto_vad_max_points)))
+        # Cap analyzed points much more aggressively for large files
+        max_points = getattr(args, 'auto_vad_max_points', 100_000)  # Reduced from 2M to 100K
+        if series_work.size > max_points:
+            step2 = int(math.ceil(series_work.size / float(max_points)))
             series_work = series_work[::step2]
             sr_work = sr_work / step2
+            print(f"[vad-opt] Using {series_work.size:,} points for VAD analysis (downsampled from {series.size:,})")
 
         # Smoothing (on the small series)
         win = max(4, int(sr_work * (args.auto_vad_smooth_ms / 1000.0)))
@@ -560,18 +597,29 @@ def run_on_file(in_path_str, args, labels, model, device, base_root, stamp):
         is_wav = True
     elif args.force_raw:
         is_wav = False
-    elif args.sr and args.sr > 0:
-        is_wav = False
+    elif args.sr and args.sr > 0 and not header_says_wav:
+        is_wav = False  # Only treat as RAW if sr provided AND not a WAV/RF64 file
     else:
         is_wav = header_says_wav
 
     if is_wav:
         try:
-            x_all, wav_sr = load_wav_iq(str(in_path), channel_order=args.channel_order)
+            # For large files, get header info first without loading entire file
+            import soundfile as sf
+            with sf.SoundFile(str(in_path)) as f:
+                wav_sr = f.samplerate
+                total_T = len(f)
             sr = float(args.sr) if args.sr > 0 else float(wav_sr)
-            total_T = x_all.shape[1]
             total_dur = total_T / sr
-            print(f"[wav] {in_path.name} header sample_rate={wav_sr} Hz; using sr={sr} Hz; duration={total_dur:.3f}s")
+
+            # Only load full file if it's small, otherwise use chunk-based processing
+            file_size_gb = os.path.getsize(in_path) / (1024**3)
+            if file_size_gb < 0.5:  # < 500MB, load everything
+                x_all, _ = load_wav_iq(str(in_path), channel_order=args.channel_order)
+                print(f"[wav] {in_path.name} loaded into memory. sr={sr} Hz; duration={total_dur:.3f}s")
+            else:
+                x_all = None  # Will load chunks on demand
+                print(f"[wav] {in_path.name} large file ({file_size_gb:.1f}GB), using streaming mode. sr={sr} Hz; duration={total_dur:.3f}s")
         except Exception as e:
             print(f"[warn] WAV parse failed for {in_path.name} ({e}). Falling back to RAW IQ.")
             is_wav = False
@@ -640,10 +688,12 @@ def run_on_file(in_path_str, args, labels, model, device, base_root, stamp):
         pbar.close()
 
     # ---- Pass 2: inference over chunks ----------------------------------------------
+    print(f"[chunks] Starting inference on {n_chunks} chunks...")
     merged_rows = []
     frame_csv_paths = []
     pbar = tqdm(total=n_chunks, desc=f"Infer {in_path.stem}", unit="chunk")
     for idx in range(n_chunks):
+        print(f"[chunk-{idx}] Loading chunk data...")
         s0 = start_samples + idx * hop_samples
         s1 = min(total_T, s0 + seg_samples)
         if s0 >= s1:
@@ -653,15 +703,45 @@ def run_on_file(in_path_str, args, labels, model, device, base_root, stamp):
             x_chunk = load_r64(chpath, channel_order="IQ", start=0, end=None)  # written as IQ
         else:
             if is_wav:
-                x_chunk = x_all[:, s0:s1]
+                if x_all is not None:
+                    # Small file loaded in memory
+                    x_chunk = x_all[:, s0:s1]
+                else:
+                    # Large file streaming mode - load chunk on demand
+                    print(f"[chunk-{idx}] Using streaming read for samples {s0}:{s1} ({(s1-s0)/sr:.1f}s)")
+                    import soundfile as sf
+                    try:
+                        with sf.SoundFile(str(in_path)) as f:
+                            f.seek(s0)
+                            samples_to_read = s1 - s0
+                            print(f"[chunk-{idx}] Reading {samples_to_read:,} samples from file...")
+                            data = f.read(samples_to_read, always_2d=True, dtype='float32').T
+                            print(f"[chunk-{idx}] Read data shape: {data.shape}")
+                            if data.shape[0] == 1:
+                                # Mono - assume interleaved I/Q
+                                mono = data[0]
+                                I = mono[0::2]
+                                Q = mono[1::2]
+                                x_chunk = np.stack([I, Q], axis=0)
+                            else:
+                                # Stereo - use first two channels
+                                x_chunk = data[:2]
+                            if args.channel_order.upper() == "QI":
+                                x_chunk = x_chunk[[1, 0]]
+                            print(f"[chunk-{idx}] Processed IQ data shape: {x_chunk.shape}")
+                    except Exception as e:
+                        print(f"[chunk-{idx}] Streaming read failed: {e}")
+                        raise
             else:
                 x_chunk = load_r64(str(in_path), channel_order=args.channel_order, start=s0, end=s1)
 
+        print(f"[chunk-{idx}] Data loaded, starting classification...")
         rows, frame_csv = classify_segment(
             x_chunk, sr, labels, model, device, args, run_dir,
             seg_index=idx, global_offset_s=s0 / float(sr),
             save_frames=args.save_frames, save_spectrograms=args.save_spectrograms, amp_on=args.amp
         )
+        print(f"[chunk-{idx}] Classification completed, {len(rows)} segments found")
         merged_rows.extend(rows)
         if frame_csv:
             frame_csv_paths.append(str(frame_csv))
@@ -755,7 +835,7 @@ def run_on_file(in_path_str, args, labels, model, device, base_root, stamp):
     with open(run_dir / "run_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
-    print(f"[OK] {in_path.name} → {run_dir}")
+    print(f"[OK] {in_path.name} -> {run_dir}")
     return bursts, run_dir, frame_csv_paths
 
 # -------------- Main --------------
@@ -777,7 +857,7 @@ def main():
     # Model / labels
     ap.add_argument("--model_ts", required=True, help="TorchScript model (.pt)")
     ap.add_argument("--labels_json", required=True, help="JSON list[str] or dict with kept_class_names")
-    ap.add_argument("--in_ch", type=int, default=12, help="Model input channels")
+    ap.add_argument("--in_ch", type=int, default=14, help="Model input channels")
 
     # VAD / framing
     ap.add_argument("--T_crop", type=int, default=16384)
@@ -807,7 +887,7 @@ def main():
     # Outputs / device / timing
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--device", default="cuda", choices=["cuda","cpu"])
-    ap.add_argument("--out_dir", default="wideband_runs")
+    ap.add_argument("--out_dir", default="step5_out")
     ap.add_argument("--tag", default="burst20m")
     ap.add_argument("--save_spectrograms", action="store_true")
     ap.add_argument("--save_frames", action="store_true")
@@ -869,12 +949,15 @@ def main():
     except Exception:
         pass
 
+    print(f"[model] Loading model from {args.model_ts}...")
     model = torch.jit.load(args.model_ts, map_location=device)
+    print(f"[model] Model loaded, moving to device {device}...")
     try:
         model.to(device)
     except Exception:
         pass
     model.eval()
+    print(f"[model] Optimizing model parameters...")
     with torch.no_grad():
         for m in model.modules():
             if isinstance(m, (torch.nn.GRU, torch.nn.LSTM)):
@@ -882,6 +965,7 @@ def main():
                     m.flatten_parameters()
                 except Exception:
                     pass
+    print(f"[model] Model ready for inference")
 
     # Ensure labels count matches model output
     dummy = torch.zeros(1, args.in_ch, args.T_crop, dtype=torch.float32, device=device)
@@ -928,7 +1012,7 @@ def main():
                 # write with file annotation
                 row = {k: b.get(k, '') for k in header}
                 w.writerow(row)
-        print(f"[OK] Consolidated bursts → {consolidated_csv}")
+        print(f"[OK] Consolidated bursts -> {consolidated_csv}")
     else:
         print("[WARN] No bursts found across inputs.")
 

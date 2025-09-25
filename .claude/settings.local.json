@@ -19,7 +19,8 @@
       "WebSearch",
       "Bash(cat:*)",
       "Bash(sed:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Read(//c/Users/Sean_Temp/Documents/Test_files/**)"
     ],
     "deny": [],
     "ask": []
