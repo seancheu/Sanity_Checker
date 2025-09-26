@@ -2048,3 +2048,213 @@
 2025-09-25 22:36:38,200 - __main__ - INFO - === Single File Pipeline Completed Successfully ===
 2025-09-25 22:36:38,201 - __main__ - INFO - All outputs in: C:\Users\Sean\Documents\Github\Sanity_Checker\out_report\20250925-192611_13-27-07_538000000Hz-006
 2025-09-25 22:36:38,202 - __main__ - INFO - === All Processing Completed Successfully ===
+2025-09-26 08:17:12,082 - __main__ - INFO - Validating system resources...
+2025-09-26 08:17:12,082 - __main__ - WARNING - psutil not available, skipping resource validation
+2025-09-26 08:17:12,082 - __main__ - INFO - Validating inputs...
+2025-09-26 08:17:12,082 - __main__ - INFO - Found 18 WAV files in directory: C:\Users\Sean_Temp\Documents\Test_files
+2025-09-26 08:17:12,082 - __main__ - INFO - Total WAV files discovered: 9
+2025-09-26 08:17:12,082 - __main__ - INFO -    1. 13-27-07_538000000Hz-005.wav (2.1GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    2. 13-29-08_554000000Hz-002.wav (2.3GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    3. 13-30-37_570000000Hz-001.wav (2.1GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    4. 14-34-50_393000000Hz.wav (1.0GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    5. 14-35-31_393000000Hz.wav (1.0GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    6. 16-32-22_538000000Hz.wav (1.0GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    7. test.wav (22.7GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    8. test2.wav (1.7GB)
+2025-09-26 08:17:12,082 - __main__ - INFO -    9. test3.wav (2.4GB)
+2025-09-26 08:17:12,082 - __main__ - INFO - Batch mode: Found 9 WAV files
+2025-09-26 08:17:12,082 - __main__ - INFO - Batch processing mode: 9 files
+2025-09-26 08:17:12,093 - __main__ - INFO - Starting batch processing of 9 files
+2025-09-26 08:17:12,093 - __main__ - INFO - Resuming batch: 5 completed, 5 failed
+2025-09-26 08:17:12,093 - __main__ - INFO - [1/9] Skipping completed file: 13-27-07_538000000Hz-005.wav
+2025-09-26 08:17:12,093 - __main__ - INFO - [2/9] Skipping completed file: 13-29-08_554000000Hz-002.wav
+2025-09-26 08:17:12,093 - __main__ - INFO - [3/9] Skipping completed file: 13-30-37_570000000Hz-001.wav
+2025-09-26 08:17:12,093 - __main__ - INFO - [4/9] Processing: 14-34-50_393000000Hz.wav
+2025-09-26 08:17:12,093 - __main__ - WARNING - psutil not available - cannot monitor memory
+2025-09-26 08:17:12,093 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\14-34-50_393000000Hz.wav
+2025-09-26 08:17:12,094 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-26 08:17:12,094 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-26 08:17:12,094 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py ...14-34-50_393000000Hz.wav --out_dir ...20250926-081712_14-34-50_393000000Hz --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-26 08:17:12,094 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-26 08:17:46,972 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-26 08:17:46,984 - __main__ - INFO - Loaded Step-1 results from sanity_check_14-34-50_393000000Hz_stats.json: 32 items
+2025-09-26 08:17:46,985 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-26 08:17:46,985 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-26 08:17:46,985 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-26 08:17:46,985 - __main__ - INFO - Batch mode check: validated.get('batch_mode')=True
+2025-09-26 08:17:46,986 - __main__ - INFO - File duration from Step 1: 13.4217728s
+2025-09-26 08:17:46,986 - __main__ - INFO - Batch mode: Setting max_duration=3.0s for memory safety (file duration: 13.4s)
+2025-09-26 08:17:46,986 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py ...14-34-50_393000000Hz.wav --out ...20250926-081712_14-34-50_393000000Hz --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --conv Q+I --fs_hint 20000000.0 --max_duration 3.0
+2025-09-26 08:17:46,986 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-26 08:17:57,239 - __main__ - WARNING - [Step-2] Process failed with return code 1
+2025-09-26 08:17:57,239 - __main__ - INFO - [Step-2] Retrying in 30 seconds...
+2025-09-26 08:18:27,247 - __main__ - INFO - [Step-2] Attempt 2/3
+2025-09-26 08:18:28,746 - __main__ - WARNING - [Step-2] Process failed with return code 1
+2025-09-26 08:18:28,747 - __main__ - INFO - [Step-2] Retrying in 60 seconds...
+2025-09-26 08:18:34,120 - __main__ - INFO - Received signal SIGINT, cleaning up...
+2025-09-26 08:18:34,122 - __main__ - INFO - Cleaned up directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\20250926-081712_14-34-50_393000000Hz
+2025-09-26 08:18:46,176 - __main__ - INFO - Validating system resources...
+2025-09-26 08:18:47,264 - __main__ - INFO - Validating inputs...
+2025-09-26 08:18:47,264 - __main__ - INFO - Found 18 WAV files in directory: C:\Users\Sean_Temp\Documents\Test_files
+2025-09-26 08:18:47,264 - __main__ - INFO - Total WAV files discovered: 9
+2025-09-26 08:18:47,264 - __main__ - INFO -    1. 13-27-07_538000000Hz-005.wav (2.1GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    2. 13-29-08_554000000Hz-002.wav (2.3GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    3. 13-30-37_570000000Hz-001.wav (2.1GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    4. 14-34-50_393000000Hz.wav (1.0GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    5. 14-35-31_393000000Hz.wav (1.0GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    6. 16-32-22_538000000Hz.wav (1.0GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    7. test.wav (22.7GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    8. test2.wav (1.7GB)
+2025-09-26 08:18:47,264 - __main__ - INFO -    9. test3.wav (2.4GB)
+2025-09-26 08:18:47,264 - __main__ - INFO - Batch mode: Found 9 WAV files
+2025-09-26 08:18:47,272 - __main__ - INFO - Batch processing mode: 9 files
+2025-09-26 08:18:47,272 - __main__ - INFO - Starting batch processing of 9 files
+2025-09-26 08:18:47,273 - __main__ - INFO - Resuming batch: 5 completed, 5 failed
+2025-09-26 08:18:47,273 - __main__ - INFO - [1/9] Skipping completed file: 13-27-07_538000000Hz-005.wav
+2025-09-26 08:18:47,273 - __main__ - INFO - [2/9] Skipping completed file: 13-29-08_554000000Hz-002.wav
+2025-09-26 08:18:47,273 - __main__ - INFO - [3/9] Skipping completed file: 13-30-37_570000000Hz-001.wav
+2025-09-26 08:18:47,273 - __main__ - INFO - [4/9] Processing: 14-34-50_393000000Hz.wav
+2025-09-26 08:18:47,274 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\14-34-50_393000000Hz.wav
+2025-09-26 08:18:47,274 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-26 08:18:47,275 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-26 08:18:47,275 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py ...14-34-50_393000000Hz.wav --out_dir ...20250926-081847_14-34-50_393000000Hz --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-26 08:18:47,275 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-26 08:19:19,770 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-26 08:19:19,781 - __main__ - INFO - Loaded Step-1 results from sanity_check_14-34-50_393000000Hz_stats.json: 32 items
+2025-09-26 08:19:19,782 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-26 08:19:19,782 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-26 08:19:19,782 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-26 08:19:19,782 - __main__ - INFO - Batch mode check: validated.get('batch_mode')=True
+2025-09-26 08:19:19,782 - __main__ - INFO - File duration from Step 1: 13.4217728s
+2025-09-26 08:19:19,782 - __main__ - INFO - Batch mode: Setting max_duration=3.0s for memory safety (file duration: 13.4s)
+2025-09-26 08:19:19,783 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py ...14-34-50_393000000Hz.wav --out ...20250926-081847_14-34-50_393000000Hz --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --conv Q+I --fs_hint 20000000.0 --max_duration 3.0
+2025-09-26 08:19:19,783 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-26 08:19:42,664 - __main__ - INFO - [Step-2] Completed successfully
+2025-09-26 08:19:42,665 - __main__ - INFO - === Step 3B: ML Signal Slicing (HDF5) ===
+2025-09-26 08:19:42,665 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing.py ...14-34-50_393000000Hz.wav --out ...slices_out --mem_budget_mb 512 --rms_win_ms 5.0 --thresh_dbfs -60.0 --min_dur_ms 5.0 --gap_ms 3.0 --pad_ms 2.0 --write_audio --max_slices 1000 --fs_hint 20000000.0
+2025-09-26 08:19:42,666 - __main__ - INFO - Step 3B timeout set to 600 seconds
+2025-09-26 08:19:42,666 - __main__ - INFO - [Step-3B] Attempt 1/3
+2025-09-26 08:21:46,593 - __main__ - INFO - [Step-3B] Completed successfully
+2025-09-26 08:21:46,593 - __main__ - WARNING - Step 4 requires Step 3B outputs (slices.h5 and meta.json)
+2025-09-26 08:21:46,593 - __main__ - INFO - Skipping Step 4 due to missing Step 3B outputs
+2025-09-26 08:21:46,593 - __main__ - INFO - === Step 5: Inference ===
+2025-09-26 08:21:46,593 - __main__ - INFO - Command: ...python.exe -u ...5_inference.py --in ...14-34-50_393000000Hz.wav --model_ts Model/best_model_script_cuda.pt --labels_json Model/selected_labels.json --out_dir ...step5_out --device cuda --seg 10.0 --batch_size 64 --sr 20000000 --channel_order QI
+2025-09-26 08:21:46,593 - __main__ - INFO - Step 5 timeout set to 1200 seconds
+2025-09-26 08:21:46,593 - __main__ - INFO - [Step-5] Attempt 1/3
+2025-09-26 08:34:07,101 - __main__ - INFO - [Step-5] Completed successfully
+2025-09-26 08:34:07,101 - __main__ - INFO - === Single File Pipeline Completed Successfully ===
+2025-09-26 08:34:07,102 - __main__ - INFO - All outputs in: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\20250926-081847_14-34-50_393000000Hz
+2025-09-26 08:34:07,102 - __main__ - INFO - File completed successfully: 14-34-50_393000000Hz.wav
+2025-09-26 08:34:07,108 - __main__ - INFO - [4/9] Completed: 14-34-50_393000000Hz.wav
+2025-09-26 08:34:07,193 - __main__ - INFO - Progress: 4/9, ETA: 0.3h (19min)
+2025-09-26 08:34:07,193 - __main__ - INFO - [5/9] Processing: 14-35-31_393000000Hz.wav
+2025-09-26 08:34:07,193 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\14-35-31_393000000Hz.wav
+2025-09-26 08:34:07,193 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-26 08:34:07,193 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-26 08:34:07,195 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py ...14-35-31_393000000Hz.wav --out_dir ...20250926-083407_14-35-31_393000000Hz --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-26 08:34:07,195 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-26 08:34:37,825 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-26 08:34:37,835 - __main__ - INFO - Loaded Step-1 results from sanity_check_14-35-31_393000000Hz_stats.json: 32 items
+2025-09-26 08:34:37,835 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-26 08:34:37,835 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-26 08:34:37,836 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-26 08:34:37,836 - __main__ - INFO - Batch mode check: validated.get('batch_mode')=True
+2025-09-26 08:34:37,836 - __main__ - INFO - File duration from Step 1: 13.4152192s
+2025-09-26 08:34:37,836 - __main__ - INFO - Batch mode: Setting max_duration=3.0s for memory safety (file duration: 13.4s)
+2025-09-26 08:34:37,836 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py ...14-35-31_393000000Hz.wav --out ...20250926-083407_14-35-31_393000000Hz --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --conv Q+I --fs_hint 20000000.0 --max_duration 3.0
+2025-09-26 08:34:37,837 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-26 08:34:57,869 - __main__ - INFO - [Step-2] Completed successfully
+2025-09-26 08:34:57,870 - __main__ - INFO - === Step 3B: ML Signal Slicing (HDF5) ===
+2025-09-26 08:34:57,870 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing.py ...14-35-31_393000000Hz.wav --out ...slices_out --mem_budget_mb 512 --rms_win_ms 5.0 --thresh_dbfs -60.0 --min_dur_ms 5.0 --gap_ms 3.0 --pad_ms 2.0 --write_audio --max_slices 1000 --fs_hint 20000000.0
+2025-09-26 08:34:57,870 - __main__ - INFO - Step 3B timeout set to 600 seconds
+2025-09-26 08:34:57,871 - __main__ - INFO - [Step-3B] Attempt 1/3
+2025-09-26 08:36:54,955 - __main__ - INFO - [Step-3B] Completed successfully
+2025-09-26 08:36:54,955 - __main__ - WARNING - Step 4 requires Step 3B outputs (slices.h5 and meta.json)
+2025-09-26 08:36:54,956 - __main__ - INFO - Skipping Step 4 due to missing Step 3B outputs
+2025-09-26 08:36:54,956 - __main__ - INFO - === Step 5: Inference ===
+2025-09-26 08:36:54,956 - __main__ - INFO - Command: ...python.exe -u ...5_inference.py --in ...14-35-31_393000000Hz.wav --model_ts Model/best_model_script_cuda.pt --labels_json Model/selected_labels.json --out_dir ...step5_out --device cuda --seg 10.0 --batch_size 64 --sr 20000000 --channel_order QI
+2025-09-26 08:36:54,957 - __main__ - INFO - Step 5 timeout set to 1200 seconds
+2025-09-26 08:36:54,957 - __main__ - INFO - [Step-5] Attempt 1/3
+2025-09-26 08:48:36,103 - __main__ - INFO - [Step-5] Completed successfully
+2025-09-26 08:48:36,104 - __main__ - INFO - === Single File Pipeline Completed Successfully ===
+2025-09-26 08:48:36,104 - __main__ - INFO - All outputs in: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\20250926-083407_14-35-31_393000000Hz
+2025-09-26 08:48:36,104 - __main__ - INFO - File completed successfully: 14-35-31_393000000Hz.wav
+2025-09-26 08:48:36,135 - __main__ - INFO - [5/9] Completed: 14-35-31_393000000Hz.wav
+2025-09-26 08:48:36,139 - __main__ - INFO - Progress: 5/9, ETA: 0.4h (24min)
+2025-09-26 08:48:36,139 - __main__ - INFO - [6/9] Skipping completed file: 16-32-22_538000000Hz.wav
+2025-09-26 08:48:36,139 - __main__ - INFO - [7/9] Processing: test.wav
+2025-09-26 08:48:36,140 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\test.wav
+2025-09-26 08:48:36,140 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-26 08:48:36,140 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-26 08:48:36,141 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py C:\Users\Sean_Temp\Documents\Test_files\test.wav --out_dir ...20250926-084836_test --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-26 08:48:36,141 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-26 08:59:58,950 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-26 08:59:58,961 - __main__ - INFO - Loaded Step-1 results from sanity_check_test_stats.json: 32 items
+2025-09-26 08:59:58,961 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-26 08:59:58,961 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-26 08:59:58,961 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-26 08:59:58,961 - __main__ - INFO - Batch mode check: validated.get('batch_mode')=True
+2025-09-26 08:59:58,961 - __main__ - INFO - File duration from Step 1: 304.3295232s
+2025-09-26 08:59:58,961 - __main__ - INFO - Batch mode: Setting max_duration=3.0s for memory safety (file duration: 304.3s)
+2025-09-26 08:59:58,961 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py C:\Users\Sean_Temp\Documents\Test_files\test.wav --out ...20250926-084836_test --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --conv Q+I --fs_hint 20000000.0 --max_duration 3.0
+2025-09-26 08:59:58,962 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-26 09:00:48,379 - __main__ - INFO - [Step-2] Completed successfully
+2025-09-26 09:00:48,379 - __main__ - INFO - === Step 3B: ML Signal Slicing (HDF5) ===
+2025-09-26 09:00:48,380 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing.py C:\Users\Sean_Temp\Documents\Test_files\test.wav --out ...slices_out --mem_budget_mb 512 --rms_win_ms 5.0 --thresh_dbfs -60.0 --min_dur_ms 5.0 --gap_ms 3.0 --pad_ms 2.0 --write_audio --max_slices 1000 --fs_hint 20000000.0
+2025-09-26 09:00:48,380 - __main__ - INFO - Step 3B timeout set to 600 seconds
+2025-09-26 09:00:48,380 - __main__ - INFO - [Step-3B] Attempt 1/3
+2025-09-26 09:44:28,419 - __main__ - INFO - [Step-3B] Completed successfully
+2025-09-26 09:44:28,421 - __main__ - WARNING - Step 4 requires Step 3B outputs (slices.h5 and meta.json)
+2025-09-26 09:44:28,422 - __main__ - INFO - Skipping Step 4 due to missing Step 3B outputs
+2025-09-26 09:44:28,422 - __main__ - INFO - === Step 5: Inference ===
+2025-09-26 09:44:28,422 - __main__ - INFO - Command: ...python.exe -u ...5_inference.py --in C:\Users\Sean_Temp\Documents\Test_files\test.wav --model_ts Model/best_model_script_cuda.pt --labels_json Model/selected_labels.json --out_dir ...step5_out --device cuda --seg 10.0 --batch_size 64 --sr 20000000 --channel_order QI
+2025-09-26 09:44:28,422 - __main__ - INFO - Step 5 timeout set to 1200 seconds
+2025-09-26 09:44:28,423 - __main__ - INFO - [Step-5] Attempt 1/3
+2025-09-26 14:30:25,953 - __main__ - INFO - [Step-5] Completed successfully
+2025-09-26 14:30:25,953 - __main__ - INFO - === Single File Pipeline Completed Successfully ===
+2025-09-26 14:30:25,953 - __main__ - INFO - All outputs in: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\20250926-084836_test
+2025-09-26 14:30:25,953 - __main__ - INFO - File completed successfully: test.wav
+2025-09-26 14:30:25,989 - __main__ - INFO - [7/9] Completed: test.wav
+2025-09-26 14:30:25,995 - __main__ - INFO - Progress: 7/9, ETA: 1.8h (106min)
+2025-09-26 14:30:25,995 - __main__ - INFO - [8/9] Skipping completed file: test2.wav
+2025-09-26 14:30:25,995 - __main__ - INFO - [9/9] Processing: test3.wav
+2025-09-26 14:30:26,002 - __main__ - INFO - Processing WAV file: C:\Users\Sean_Temp\Documents\Test_files\test3.wav
+2025-09-26 14:30:26,002 - __main__ - INFO - Output directory: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report
+2025-09-26 14:30:26,002 - __main__ - INFO - === Step 1: Sanity Check ===
+2025-09-26 14:30:26,003 - __main__ - INFO - Command: ...python.exe -u ...1_sanity_check_iq.py C:\Users\Sean_Temp\Documents\Test_files\test3.wav --out_dir ...20250926-143026_test3 --mem_budget_mb 512 --fs_hint 20000000.0
+2025-09-26 14:30:26,003 - __main__ - INFO - [Step-1] Attempt 1/3
+2025-09-26 14:31:52,361 - __main__ - INFO - [Step-1] Completed successfully
+2025-09-26 14:31:52,368 - __main__ - INFO - Loaded Step-1 results from sanity_check_test3_stats.json: 32 items
+2025-09-26 14:31:52,375 - __main__ - INFO - I/Q convention mapping: 'Q+jI' -> 'Q+I'
+2025-09-26 14:31:52,375 - __main__ - INFO - I/Q convention: Q+jI -> Q+I
+2025-09-26 14:31:52,375 - __main__ - INFO - === Step 2: Wideband Exploration ===
+2025-09-26 14:31:52,376 - __main__ - INFO - Batch mode check: validated.get('batch_mode')=True
+2025-09-26 14:31:52,376 - __main__ - INFO - File duration from Step 1: 32.362496s
+2025-09-26 14:31:52,376 - __main__ - INFO - Batch mode: Setting max_duration=3.0s for memory safety (file duration: 32.4s)
+2025-09-26 14:31:52,376 - __main__ - INFO - Command: ...python.exe -u ...2_wideband_exploration.py C:\Users\Sean_Temp\Documents\Test_files\test3.wav --out ...20250926-143026_test3 --nperseg 4096 --overlap 0.5 --prom_db 8.0 --cfar_k 3.0 --cfar_guard 1 --cfar_train 6 --conv Q+I --fs_hint 20000000.0 --max_duration 3.0
+2025-09-26 14:31:52,376 - __main__ - INFO - [Step-2] Attempt 1/3
+2025-09-26 14:32:25,917 - __main__ - INFO - [Step-2] Completed successfully
+2025-09-26 14:32:25,917 - __main__ - INFO - === Step 3B: ML Signal Slicing (HDF5) ===
+2025-09-26 14:32:25,917 - __main__ - INFO - Command: ...python.exe -u ...3_signal_detection_slicing.py C:\Users\Sean_Temp\Documents\Test_files\test3.wav --out ...slices_out --mem_budget_mb 512 --rms_win_ms 5.0 --thresh_dbfs -60.0 --min_dur_ms 5.0 --gap_ms 3.0 --pad_ms 2.0 --write_audio --max_slices 1000 --fs_hint 20000000.0
+2025-09-26 14:32:25,917 - __main__ - INFO - Step 3B timeout set to 600 seconds
+2025-09-26 14:32:25,917 - __main__ - INFO - [Step-3B] Attempt 1/3
+2025-09-26 14:37:24,519 - __main__ - INFO - [Step-3B] Completed successfully
+2025-09-26 14:37:24,519 - __main__ - WARNING - Step 4 requires Step 3B outputs (slices.h5 and meta.json)
+2025-09-26 14:37:24,519 - __main__ - INFO - Skipping Step 4 due to missing Step 3B outputs
+2025-09-26 14:37:24,520 - __main__ - INFO - === Step 5: Inference ===
+2025-09-26 14:37:24,520 - __main__ - INFO - Command: ...python.exe -u ...5_inference.py --in C:\Users\Sean_Temp\Documents\Test_files\test3.wav --model_ts Model/best_model_script_cuda.pt --labels_json Model/selected_labels.json --out_dir ...step5_out --device cuda --seg 10.0 --batch_size 64 --sr 20000000 --channel_order QI
+2025-09-26 14:37:24,520 - __main__ - INFO - Step 5 timeout set to 1200 seconds
+2025-09-26 14:37:24,520 - __main__ - INFO - [Step-5] Attempt 1/3
+2025-09-26 15:07:42,956 - __main__ - INFO - [Step-5] Completed successfully
+2025-09-26 15:07:42,957 - __main__ - INFO - === Single File Pipeline Completed Successfully ===
+2025-09-26 15:07:42,957 - __main__ - INFO - All outputs in: C:\Users\Sean_Temp\Documents\Sanity_Checker\out_report\20250926-143026_test3
+2025-09-26 15:07:42,959 - __main__ - INFO - File completed successfully: test3.wav
+2025-09-26 15:07:42,988 - __main__ - INFO - [9/9] Completed: test3.wav
+2025-09-26 15:07:43,000 - __main__ - INFO - Progress: 9/9, ETA: 0.0h (0min)
+2025-09-26 15:07:43,000 - __main__ - INFO - Batch processing completed:
+2025-09-26 15:07:43,000 - __main__ - INFO -   Total files: 9
+2025-09-26 15:07:43,000 - __main__ - INFO -   Completed: 9
+2025-09-26 15:07:43,001 - __main__ - INFO -   Failed: 0
+2025-09-26 15:07:43,001 - __main__ - INFO -   Success rate: 100.0%
+2025-09-26 15:07:43,001 - __main__ - INFO -   Total time: 6.8h (409min)
+2025-09-26 15:07:43,001 - __main__ - INFO - === All Processing Completed Successfully ===
