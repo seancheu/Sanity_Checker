@@ -25,7 +25,11 @@
       "Bash(findstr:*)",
       "Bash(taskkill:*)",
       "Bash(TASKKILL:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Read(//c/Users/Sean_Temp/Downloads/xfer/fully_offline_package/**)",
+      "Bash(copy:*)",
+      "Bash(xcopy:*)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []
